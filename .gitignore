@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+.venv/
+venv/
+ENV/
+
+# Environment variables (contains private keys!)
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Database
+data/trading_bot.db
+data/trading_bot.db-wal
+data/trading_bot.db-shm
+
+# Runtime data
+data/bot_status.json
+logs/
+*.log
+
+# Historical data (large CSV files)
+data/history/
+data/backtest_results/
+
+# Claude Code
+.claude/
