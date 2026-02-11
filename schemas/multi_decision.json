@@ -1,0 +1,66 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AI Multi-Pair Trading Decision",
+  "type": "object",
+  "properties": {
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": ["BUY", "SELL", "HOLD", "CLOSE"],
+            "description": "Trading action to take"
+          },
+          "symbol": {
+            "type": "string",
+            "description": "Trading pair symbol (e.g. ETHUSDC)"
+          },
+          "size_pct": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 10,
+            "description": "Position size as percentage of bankroll"
+          },
+          "order_type": {
+            "type": "string",
+            "enum": ["LIMIT", "MARKET"],
+            "description": "Order type"
+          },
+          "limit_price": {
+            "type": "number",
+            "description": "Limit price (required for LIMIT orders)"
+          },
+          "stop_loss": {
+            "type": "number",
+            "description": "Stop loss price level"
+          },
+          "take_profit": {
+            "type": "number",
+            "description": "Take profit price level"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Confidence level in the decision (0-1)"
+          },
+          "reasoning": {
+            "type": "string",
+            "description": "Explanation of the trading decision"
+          },
+          "strategy_type": {
+            "type": "string",
+            "enum": ["grid", "mean_reversion", "momentum", "other"],
+            "description": "Which strategy this decision belongs to"
+          }
+        },
+        "required": ["action", "reasoning", "confidence"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["decisions"],
+  "additionalProperties": false
+}
