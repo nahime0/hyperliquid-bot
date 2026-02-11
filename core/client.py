@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from eth_account import Account
 from hyperliquid.info import Info
 from hyperliquid.exchange import Exchange
 from hyperliquid.utils import constants
@@ -31,11 +32,20 @@ class HyperliquidClient:
         self._exchange: Exchange | None = None
         self._meta: dict[str, Any] | None = None
         self._sz_decimals: dict[str, int] = {}  # coin → szDecimals
+        self._address: str = ""  # derived Ethereum address
 
     async def connect(self) -> None:
         """Initialize Info and Exchange clients."""
         cfg = self._settings.hyperliquid
         api_url = cfg.api_url
+
+        # Derive Ethereum address from private key (needed for user_state queries)
+        if cfg.account_address:
+            self._address = cfg.account_address
+        elif cfg.private_key:
+            acct = Account.from_key(cfg.private_key)
+            self._address = acct.address
+            logger.info("Derived address from private key: %s", self._address)
 
         # Info client (read-only, no auth needed)
         self._info = await asyncio.to_thread(
@@ -44,11 +54,14 @@ class HyperliquidClient:
 
         # Exchange client (needs private key for trading)
         if cfg.private_key:
+            wallet = Account.from_key(cfg.private_key)
             self._exchange = await asyncio.to_thread(
                 Exchange,
-                cfg.private_key,
+                wallet,
                 api_url,
-                cfg.account_address or None,
+                None,  # meta (auto-fetched)
+                None,  # vault_address
+                self._address if cfg.account_address else None,  # account_address
             )
 
         # Load asset metadata
@@ -140,15 +153,40 @@ class HyperliquidClient:
 
     async def get_user_state(self) -> dict[str, Any]:
         """Get account state: margin summary + asset positions."""
-        cfg = self._settings.hyperliquid
-        address = cfg.account_address or cfg.private_key
-        return await self._retry(self.info.user_state, address)
+        if not self._address:
+            raise RuntimeError("No address available. Set HL_ACCOUNT_ADDRESS or HL_PRIVATE_KEY.")
+        return await self._retry(self.info.user_state, self._address)
+
+    async def get_spot_state(self) -> dict[str, Any]:
+        """Get spot clearinghouse state (for unified account USDC balance)."""
+        if not self._address:
+            raise RuntimeError("No address available. Set HL_ACCOUNT_ADDRESS or HL_PRIVATE_KEY.")
+        return await self._retry(
+            self.info.post, "/info", {"type": "spotClearinghouseState", "user": self._address}
+        )
 
     async def get_account_balance(self) -> float:
-        """Get accountValue in USDC from marginSummary."""
+        """Get total available balance (perp accountValue + spot USDC).
+
+        On unified accounts, USDC sits in spotClearinghouseState while
+        perp accountValue only reflects margin used by open positions.
+        """
+        # Perp margin value (unrealized PnL + margin in use)
         state = await self.get_user_state()
-        margin = state.get("marginSummary", {})
-        return float(margin.get("accountValue", 0))
+        perp_value = float(state.get("marginSummary", {}).get("accountValue", 0))
+
+        # Spot USDC balance (where idle funds live on unified accounts)
+        spot_usdc = 0.0
+        try:
+            spot_state = await self.get_spot_state()
+            for bal in spot_state.get("balances", []):
+                if bal.get("coin") == "USDC":
+                    spot_usdc = float(bal.get("total", 0))
+                    break
+        except Exception:
+            logger.debug("Could not fetch spot state, using perp-only balance")
+
+        return perp_value + spot_usdc
 
     async def get_open_positions(self) -> list[dict[str, Any]]:
         """Get open perpetual positions with size, entry, PnL, liquidation.

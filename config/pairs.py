@@ -14,13 +14,19 @@ logger = get_logger(__name__)
 # Core coins — always included
 CORE_COINS: list[str] = ["BTC", "ETH", "SOL"]
 
-# Static fallback — used only when discovery is unavailable
+# Top 50 coins by 24h volume — used for backtesting and fallback
 ALL_COINS: list[str] = [
-    "BTC", "ETH", "SOL", "AVAX", "DOGE", "LINK", "ADA", "DOT",
+    "BTC", "ETH", "SOL", "HYPE", "ZRO", "XRP", "UNI", "ZEC",
+    "ASTER", "PAXG", "FARTCOIN", "SUI", "MON", "BNB", "DOGE",
+    "PUMP", "BERA", "RESOLV", "XPL", "LIT", "AVAX", "AAVE",
+    "XMR", "AXS", "LINK", "kPEPE", "BCH", "LTC", "WLFI", "ADA",
+    "TRUMP", "CRV", "ENA", "TAO", "STABLE", "ARB", "POL",
+    "VIRTUAL", "WIF", "PENGU", "STBL", "NEAR", "kBONK", "SKR",
+    "kSHIB", "APT", "JUP", "WLD", "CC", "NIL",
 ]
 
 # Default intervals for candle data
-DEFAULT_INTERVALS: list[str] = ["15m", "1h"]
+DEFAULT_INTERVALS: list[str] = ["5m", "15m", "1h"]
 
 
 async def discover_perp_coins(

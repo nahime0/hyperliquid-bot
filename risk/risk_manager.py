@@ -79,14 +79,39 @@ class RiskManager:
     # ── Lifecycle ────────────────────────────────────────────
 
     async def start(self) -> None:
-        """Initialize: load peak balance from DB, refresh current balance."""
-        snapshot = await self._db.get_latest_balance()
-        if snapshot:
-            self._peak_balance = snapshot.get("peak_balance", 0) or snapshot["total_usdc"]
+        """Initialize from Hyperliquid (source of truth), then reconcile with DB.
+
+        Flow:
+        1. Fetch live balance + open positions from Hyperliquid
+        2. Use live balance as baseline for peak
+        3. Only use DB peak if it's from a consistent session (same ballpark)
+        This handles: fresh wallets, wallet changes, manual web trades, crashes.
+        """
+        # Step 1: Live state from Hyperliquid
         await self.refresh()
+
+        # Step 2: Reconcile peak with DB history (for drawdown tracking across restarts)
+        if self._current_balance > 0:
+            db_snapshot = await self._db.get_latest_balance()
+            if db_snapshot:
+                db_peak = db_snapshot.get("peak_balance", 0) or 0
+                db_balance = db_snapshot.get("total_usdc", 0) or 0
+                # Only trust DB peak if last recorded balance is in the same ballpark
+                # (protects against stale data from different wallet/network)
+                if db_peak > self._peak_balance and db_balance > 0:
+                    ratio = self._current_balance / db_balance
+                    if 0.5 < ratio < 2.0:
+                        self._peak_balance = db_peak
+                        logger.info("Restored peak from DB: %.2f (last balance: %.2f)", db_peak, db_balance)
+                    else:
+                        logger.info(
+                            "Ignoring stale DB peak %.2f (DB balance=%.2f vs live=%.2f)",
+                            db_peak, db_balance, self._current_balance,
+                        )
+
         logger.info(
-            "RiskManager started — balance=%.2f peak=%.2f kill=%s",
-            self._current_balance, self._peak_balance, self._kill_switch,
+            "RiskManager started — balance=%.2f peak=%.2f positions=%d kill=%s",
+            self._current_balance, self._peak_balance, self._open_position_count, self._kill_switch,
         )
 
     async def refresh(self) -> None:

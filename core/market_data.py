@@ -15,14 +15,21 @@ from typing import Any
 import pandas as pd
 import ta as ta_lib
 
+import logging as _logging
+
 from config.settings import Settings
 from core.client import HyperliquidClient
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Suppress noisy SDK websocket errors (testnet sends non-dict messages
+# that crash ws_msg_to_identifier — SDK bug, not ours)
+_logging.getLogger("websocket").setLevel(_logging.CRITICAL)
+
 # Max concurrent REST calls for initial candle loading
-_REST_SEMAPHORE_LIMIT = 10
+# Keep low to avoid 429 on testnet (60 coins × 3 intervals = 180 calls)
+_REST_SEMAPHORE_LIMIT = 5
 
 # How many candles to request initially per interval
 _INTERVAL_LIMITS: dict[str, int] = {
