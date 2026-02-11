@@ -2,17 +2,21 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from core.ai_engine.types import Decision
 
 
 class Strategy(ABC):
     """Base interface that every strategy must implement.
 
     The main loop calls these methods:
-      - start()      — once at boot (load exchange info, restore state)
-      - update()     — every tick (check fills, place new orders)
-      - stop()       — on shutdown (cancel open orders, persist state)
-      - get_state()  — when building the AI snapshot
+      - start()                — once at boot (load exchange info, restore state)
+      - update()               — every tick (compute signals)
+      - generate_decisions()   — produce BUY/SHORT/CLOSE Decisions
+      - stop()                 — on shutdown (cancel open orders, persist state)
+      - get_state()            — when building the AI snapshot
     """
 
     @abstractmethod
@@ -27,7 +31,14 @@ class Strategy(ABC):
     async def update(self) -> None:
         """Called every tick by the main loop.
 
-        Check for filled orders, place new ones, handle trailing, etc.
+        Compute indicators, update signals, etc.
+        """
+
+    @abstractmethod
+    async def generate_decisions(self) -> list[Decision]:
+        """Generate trading decisions based on current signals.
+
+        Returns a list of Decision objects ready for risk validation.
         """
 
     @abstractmethod

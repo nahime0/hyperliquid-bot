@@ -3,11 +3,17 @@
 Architecture:
   Loop → Strategy generates candidates → Risk validates → [AI veto] → Execute
 
-The bot trades autonomously with codified rules (trend filter, mean reversion).
+The bot trades autonomously with codified rules. Supports multiple strategies:
+  - mean_reversion: Bollinger + RSI on 15m (original)
+  - rsi_div: RSI Divergence on 5m (swing detection)
+  - multi: Both strategies merged (default)
+
 AI is demoted to an optional review/veto role.
 
 Usage:
-    .venv/bin/python main.py                     # testnet (default) + dashboard on :8080
+    .venv/bin/python main.py                     # multi-strategy (default)
+    .venv/bin/python main.py --strategy rsi_div  # RSI Divergence only
+    .venv/bin/python main.py --strategy mean_reversion  # legacy mean reversion
     .venv/bin/python main.py --live               # live (mainnet) trading
     .venv/bin/python main.py --paper              # paper trading (log only, no orders)
     .venv/bin/python main.py --no-ai              # no AI review (pure rule-based)
@@ -36,6 +42,8 @@ from risk.position_tracker import PositionTracker
 from risk.risk_manager import RiskManager, ValidationResult
 from strategies.cooldown import CooldownTracker
 from strategies.mean_reversion import MeanReversionStrategy
+from strategies.multi_strategy import MultiStrategy
+from strategies.rsi_divergence import RSIDivergenceStrategy
 from strategies.trend_filter import TrendFilter
 from aiohttp import web
 
@@ -68,6 +76,7 @@ class Bot:
         once: bool = False,
         dashboard_port: int = DASHBOARD_PORT,
         no_dashboard: bool = False,
+        strategy_mode: str = "multi",
     ) -> None:
         self._settings = settings
         self._paper = paper
@@ -76,6 +85,7 @@ class Bot:
         self._running = False
         self._dashboard_port = dashboard_port
         self._no_dashboard = no_dashboard
+        self._strategy_mode = strategy_mode
 
         # Components (initialised in start())
         self._client = HyperliquidClient(settings)
@@ -88,13 +98,43 @@ class Bot:
         # Autonomous components
         self._trend_filter = TrendFilter(self._market_data)
         self._cooldown = CooldownTracker(settings.risk)
+
         self._mean_rev = MeanReversionStrategy(
             self._market_data,
             self._trend_filter,
             self._cooldown,
             self._positions,
             settings.risk,
+            interval=settings.strategy.mr_interval,
         )
+        self._rsi_div = RSIDivergenceStrategy(
+            self._market_data,
+            self._trend_filter,
+            self._cooldown,
+            self._positions,
+            settings.risk,
+            settings.strategy,
+        )
+
+        # Build active strategy based on mode
+        if strategy_mode == "mean_reversion":
+            self._strategy: Strategy = self._mean_rev
+        elif strategy_mode == "rsi_div":
+            self._strategy = self._rsi_div
+        else:  # "multi" (default)
+            sub_strategies: list[Strategy] = []
+            for name in settings.strategy.active_strategies:
+                if name == "mean_reversion":
+                    sub_strategies.append(self._mean_rev)
+                elif name == "rsi_divergence":
+                    sub_strategies.append(self._rsi_div)
+            if not sub_strategies:
+                sub_strategies = [self._mean_rev, self._rsi_div]
+            self._strategy = MultiStrategy(
+                sub_strategies,
+                max_decisions=settings.risk.max_open_positions,
+            )
+
         self._telegram = TelegramNotifier(settings.telegram)
 
         # Dashboard (non-blocking aiohttp server)
@@ -121,7 +161,7 @@ class Bot:
         mode = "PAPER" if self._paper else ("MAINNET" if not cfg.testnet else "TESTNET")
         logger.info("=" * 60)
         logger.info("  Hyperliquid Trading Bot starting  [%s]", mode)
-        logger.info("  AI review: %s  |  Paper: %s  |  Once: %s", not self._no_ai, self._paper, self._once)
+        logger.info("  AI review: %s  |  Paper: %s  |  Once: %s  |  Strategy: %s", not self._no_ai, self._paper, self._once, self._strategy_mode)
         logger.info("  Leverage: %dx  |  Margin: %s", cfg.default_leverage, cfg.margin_mode)
         logger.info("=" * 60)
 
@@ -147,13 +187,16 @@ class Bot:
                 except Exception:
                     logger.debug("Failed to set leverage for %s", coin, exc_info=True)
 
-        # Market data — start WebSocket feeds
-        await self._market_data.start(self._active_coins)
+        # Market data — start WebSocket feeds with configured intervals
+        intervals = list(self._settings.market.intervals)
+        await self._market_data.start(self._active_coins, intervals=intervals)
 
         # Strategies — pass discovered coins
         self._mean_rev.set_pairs(self._active_coins)
         self._mean_rev.set_max_funding_rate(cfg.max_funding_rate)
-        await self._mean_rev.start()
+        self._rsi_div.set_pairs(self._active_coins)
+        self._rsi_div.set_max_funding_rate(cfg.max_funding_rate)
+        await self._strategy.start()
 
         # Risk manager
         self._risk.set_active_pairs(self._active_coins)
@@ -185,9 +228,9 @@ class Bot:
         await self._telegram.notify_alert("Bot Stopping", "Graceful shutdown initiated")
 
         try:
-            await self._mean_rev.stop()
+            await self._strategy.stop()
         except Exception:
-            logger.exception("Error stopping mean reversion")
+            logger.exception("Error stopping strategy")
 
         # Final balance snapshot
         try:
@@ -298,10 +341,10 @@ class Bot:
 
         # 4. Update strategies
         await self._trend_filter.update(self._active_coins)
-        await self._mean_rev.update()
+        await self._strategy.update()
 
         # 5. Generate autonomous decisions
-        candidates = await self._mean_rev.generate_decisions()
+        candidates = await self._strategy.generate_decisions()
 
         if candidates:
             logger.info(
@@ -467,9 +510,8 @@ class Bot:
                 "leverage": cfg.default_leverage,
                 "margin_mode": cfg.margin_mode,
                 "risk_metrics": metrics,
-                "strategies": {
-                    "mean_reversion": self._mean_rev.get_state(),
-                },
+                "strategy_mode": self._strategy_mode,
+                "strategies": self._strategy.get_state(),
             }
             Path("data/bot_status.json").write_text(
                 json.dumps(status, default=str)
@@ -506,8 +548,15 @@ class Bot:
                 pos["age_minutes"] = round(age_min, 1)
 
         # Only include coins with active signals or open positions
-        mr_state = self._mean_rev.get_state()
-        signal_symbols = set(mr_state.get("oversold", []) + mr_state.get("overbought", []))
+        strategy_state = self._strategy.get_state()
+        signal_symbols: set[str] = set()
+        # Collect signal symbols from strategy state (varies by strategy type)
+        for key in ("oversold", "overbought", "bullish_divergences", "bearish_divergences"):
+            signal_symbols.update(strategy_state.get(key, []))
+        # Also check sub_strategies if multi
+        for sub in strategy_state.get("sub_strategies", {}).values():
+            for key in ("oversold", "overbought", "bullish_divergences", "bearish_divergences"):
+                signal_symbols.update(sub.get(key, []))
         snapshot_coins = sorted(signal_symbols | position_symbols | set(CORE_COINS))
 
         snapshot = await self._market_data.generate_snapshot(
@@ -519,9 +568,7 @@ class Bot:
         )
 
         snapshot["risk_metrics"] = risk_metrics
-        snapshot["strategies"] = {
-            "mean_reversion": mr_state,
-        }
+        snapshot["strategies"] = strategy_state
         snapshot["total_coins_monitored"] = len(self._active_coins)
 
         return snapshot
@@ -724,6 +771,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--once", action="store_true", help="Run one cycle then exit")
     parser.add_argument("--no-dashboard", action="store_true", help="Disable the web dashboard")
     parser.add_argument("--dashboard-port", type=int, default=DASHBOARD_PORT, help=f"Dashboard port (default: {DASHBOARD_PORT})")
+    parser.add_argument(
+        "--strategy",
+        choices=["multi", "mean_reversion", "rsi_div"],
+        default="multi",
+        help="Strategy mode: multi (default), mean_reversion, rsi_div",
+    )
     return parser.parse_args()
 
 
@@ -745,6 +798,7 @@ async def async_main() -> None:
         once=args.once,
         dashboard_port=args.dashboard_port,
         no_dashboard=args.no_dashboard,
+        strategy_mode=args.strategy,
     )
 
     loop = asyncio.get_running_loop()

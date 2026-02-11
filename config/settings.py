@@ -90,6 +90,19 @@ class RiskConfig:
 class MarketConfig:
     min_pair_volume: float = 50_000.0   # minimum 24h volume in USDC
     max_coins: int = 60                 # max perpetual coins to monitor
+    intervals: tuple[str, ...] = ("5m", "15m", "1h")  # candle intervals to subscribe
+
+
+@dataclass(frozen=True)
+class StrategyConfig:
+    active_strategies: tuple[str, ...] = ("mean_reversion", "rsi_divergence")
+    rsi_div_period: int = 14
+    rsi_div_swing_window: int = 5
+    rsi_div_long_exit: float = 55.0   # optimized from sweep (was 60)
+    rsi_div_short_exit: float = 35.0  # optimized from sweep (was 40)
+    primary_interval: str = "5m"      # RSI Div uses 5m
+    mr_interval: str = "15m"          # Mean Reversion uses 15m
+    trend_interval: str = "1h"        # Trend filter on 1h
 
 
 @dataclass(frozen=True)
@@ -108,6 +121,7 @@ class Settings:
     ai: AIConfig = field(default_factory=AIConfig)
     risk: RiskConfig = field(default_factory=RiskConfig)
     market: MarketConfig = field(default_factory=MarketConfig)
+    strategy: StrategyConfig = field(default_factory=StrategyConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     log_level: str = "INFO"
     db_path: str = "data/trading_bot.db"
@@ -168,6 +182,18 @@ def load_settings() -> Settings:
         market=MarketConfig(
             min_pair_volume=float(os.getenv("MIN_PAIR_VOLUME", "50000")),
             max_coins=int(os.getenv("MAX_COINS", "60")),
+        ),
+        strategy=StrategyConfig(
+            active_strategies=tuple(
+                os.getenv("ACTIVE_STRATEGIES", "mean_reversion,rsi_divergence").split(",")
+            ),
+            rsi_div_period=int(os.getenv("RSI_DIV_PERIOD", "14")),
+            rsi_div_swing_window=int(os.getenv("RSI_DIV_SWING_WINDOW", "5")),
+            rsi_div_long_exit=float(os.getenv("RSI_DIV_LONG_EXIT", "55.0")),
+            rsi_div_short_exit=float(os.getenv("RSI_DIV_SHORT_EXIT", "35.0")),
+            primary_interval=os.getenv("PRIMARY_INTERVAL", "5m"),
+            mr_interval=os.getenv("MR_INTERVAL", "15m"),
+            trend_interval=os.getenv("TREND_INTERVAL", "1h"),
         ),
         telegram=TelegramConfig(
             bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),

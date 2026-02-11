@@ -26,12 +26,14 @@ _REST_SEMAPHORE_LIMIT = 10
 
 # How many candles to request initially per interval
 _INTERVAL_LIMITS: dict[str, int] = {
+    "5m": 300,   # ~25 hours — RSI Divergence needs swing history
     "15m": 200,
-    "1h": 300,  # need 200+ for EMA200
+    "1h": 300,   # need 200+ for EMA200
 }
 
 # Interval durations in milliseconds (for start_ms calculation)
 _INTERVAL_MS: dict[str, int] = {
+    "5m": 5 * 60 * 1000,
     "15m": 15 * 60 * 1000,
     "1h": 60 * 60 * 1000,
 }

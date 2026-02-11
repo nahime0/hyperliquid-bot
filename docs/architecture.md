@@ -52,7 +52,7 @@ Cache in memoria dei dati di mercato con aggiornamento via WebSocket.
 - MACD(12, 26, 9) via `ta.trend.MACD`
 - EMA(9, 21, 50) via `ta.trend.EMAIndicator`
 
-**Intervalli:** `15m` (200 candele iniziali) e `1h` (300 candele per EMA200).
+**Intervalli:** `5m` (300 candele, ~25h — per RSI Divergence), `15m` (200 candele) e `1h` (300 candele per EMA200). Configurabile via `MarketConfig.intervals`.
 
 ### 3. Bot (`main.py`)
 
@@ -63,12 +63,17 @@ Orchestratore principale. Possiede tutti i componenti e gestisce il loop.
 2. `run()` — Loop principale con `_tick()` ogni `decision_interval` secondi
 3. `stop()` — Shutdown graceful: salva stato, chiude connessioni
 
+**Strategy modes** (`--strategy` flag):
+- `multi` (default): `MultiStrategy` aggrega decisions da Mean Reversion (15m) + RSI Divergence (5m)
+- `mean_reversion`: Solo Mean Reversion su 15m (legacy)
+- `rsi_div`: Solo RSI Divergence su 5m
+
 **Flusso `_tick()`:**
 1. Risk refresh (balance, posizioni, kill switch, daily pause)
 2. Check SL/TP/trailing/time stop su posizioni aperte
 3. Refresh funding rates (ogni 5 cicli)
-4. Update trend filter + mean reversion signals
-5. Generate candidate decisions
+4. Update trend filter + active strategy (multi/single)
+5. Generate candidate decisions (merged if multi)
 6. AI review opzionale
 7. Sort: CLOSE first, poi entries
 8. Anti-churning: non comprare cio' che stai vendendo nello stesso ciclo
@@ -88,14 +93,17 @@ Hyperliquid API
               (allMids, candles)           │
                                           ▼
                                     DataFrame cache
-                                    (per coin/interval)
+                                (per coin/interval: 5m, 15m, 1h)
                                           │
-                    ┌─────────────────────┤
-                    │                     │
-              TrendFilter          MeanReversion
-              (1h EMA50/200)       (15m RSI/BB/Vol)
-                    │                     │
-                    └──────────┬──────────┘
+                    ┌─────────────────────┼─────────────────────┐
+                    │                     │                     │
+              TrendFilter          MeanReversion         RSIDivergence
+              (1h EMA50/200)       (15m RSI/BB/Vol)      (5m swing/RSI)
+                    │                     │                     │
+                    └──────────┬──────────┴──────────┬──────────┘
+                               │                     │
+                         MultiStrategy ◄─────────────┘
+                         (decision merger)
                                │
                           Decisions
                           (BUY/SHORT/CLOSE)
@@ -124,7 +132,8 @@ Tutte le configurazioni sono dataclass frozen (`@dataclass(frozen=True)`):
 - `HyperliquidConfig` — API, testnet, leverage, margin mode
 - `AIConfig` — modelli, timeout, backend, soglie
 - `RiskConfig` — limiti trading, trailing, cooldown
-- `MarketConfig` — volume minimo, max coins
+- `MarketConfig` — volume minimo, max coins, intervalli candele
+- `StrategyConfig` — strategie attive, parametri RSI Div, intervalli per strategia
 - `TelegramConfig` — notifiche
 
 Caricate da variabili d'ambiente in `load_settings()`.
