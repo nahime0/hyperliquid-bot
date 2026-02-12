@@ -63,6 +63,15 @@ class CooldownTracker:
 
         return True, ""
 
+    def is_global_cooldown_active(self) -> bool:
+        """Check if global cooldown is currently active."""
+        return time.time() < self._global_cooldown_until
+
+    def get_symbol_cooldown_remaining(self, symbol: str) -> float:
+        """Return remaining cooldown seconds for a symbol (0 if none)."""
+        expiry = self._symbol_cooldowns.get(symbol, 0.0)
+        return max(0.0, expiry - time.time())
+
     def get_state(self) -> dict[str, object]:
         now = time.time()
         active_symbol = {

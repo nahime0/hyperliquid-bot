@@ -1,27 +1,33 @@
-"""Mean Reversion — autonomous decision generator.
+"""Mean Reversion — scoring-based decision generator.
 
-Generates BUY/SHORT/SELL/CLOSE decisions autonomously.
-The AI is demoted to an optional review/veto role.
+Generates BUY/SHORT/SELL/CLOSE decisions using a scoring system.
+Each condition contributes a weighted score; signal fires when score >= 0.50.
+The AI reviews every signal and makes the final call.
 
-LONG Entry (ALL must be true):
-  - RSI(14) < 35 on 15m (oversold — relaxed, AI filters)
-  - Price <= lower Bollinger Band on 15m
-  - RSI on 1h < 60 (no macro divergence)
-  - Cooldown passed for the symbol
-  - No open position on the same symbol
-  - Trend info passed to AI but NOT used as gate
+LONG Entry scoring:
+  - RSI(14) < 35 on 15m           → +0.25
+  - Price <= lower Bollinger Band  → +0.25
+  - Volume ratio >= 1.0            → +0.15
+  - RSI on 1h < 60 (macro align)  → +0.15
+  - |funding| < max_funding_rate   → +0.10
+  - No per-symbol cooldown         → +0.10
+  Score >= 0.50 → generate signal (confidence = score)
 
-SHORT Entry (ALL must be true):
-  - RSI(14) > 65 on 15m (overbought — relaxed, AI filters)
-  - Price >= upper Bollinger Band on 15m
-  - RSI on 1h > 40
-  - Cooldown passed + no open position
-  - Trend info passed to AI but NOT used as gate
+SHORT Entry scoring (mirrored):
+  - RSI(14) > 65 on 15m           → +0.25
+  - Price >= upper Bollinger Band  → +0.25
+  - Volume ratio >= 1.0            → +0.15
+  - RSI on 1h > 40 (macro align)  → +0.15
+  - |funding| < max_funding_rate   → +0.10
+  - No per-symbol cooldown         → +0.10
 
-Funding rate: |funding| < max_funding_rate before any entry.
+Hard blocks (always reject, bypass scoring):
+  - |funding| >= 0.001 (extreme funding)
+  - Global cooldown active (3+ consecutive losses)
+  - Fresh per-symbol cooldown (loss < 10 min ago)
 
-Exit (ANY trigger):
-  - LONG: RSI > 70 or price >= upper BB
+Exit (ANY trigger, unchanged):
+  - LONG: RSI > 65 or price >= upper BB
   - SHORT: RSI < 30 or price <= lower BB
   - Time stop: 4h+ with PnL < 0.5% (handled by PositionTracker)
 """
@@ -49,15 +55,28 @@ logger = get_logger(__name__)
 
 # ── Signal thresholds ────────────────────────────────────────
 
-RSI_OVERSOLD = 35.0           # relaxed oversold (was 30) — AI does fine filtering
-RSI_OVERBOUGHT = 65.0         # exit for LONG (was 70)
-RSI_OVERBOUGHT_ENTRY = 65.0   # entry for SHORT (was 70) — AI does fine filtering
+RSI_OVERSOLD = 35.0           # LONG threshold
+RSI_OVERBOUGHT = 65.0         # exit for LONG
+RSI_OVERBOUGHT_ENTRY = 65.0   # SHORT entry threshold
 RSI_1H_MAX = 60.0             # macro RSI ceiling for LONG entries
 RSI_1H_MIN_SHORT = 40.0       # macro RSI floor for SHORT entries
 RSI_PERIOD = 14
 BB_PERIOD = 20
 BB_STD = 2.0
-MIN_VOLUME_RATIO = 1.0        # no volume filter (was 1.2)
+MIN_VOLUME_RATIO = 1.0        # volume ratio threshold
+
+# ── Scoring weights ─────────────────────────────────────────
+W_RSI = 0.25                  # RSI oversold/overbought
+W_BB = 0.25                   # price at/beyond Bollinger Band
+W_VOLUME = 0.15               # volume ratio >= threshold
+W_MACRO_RSI = 0.15            # 1h RSI alignment
+W_FUNDING = 0.10              # funding rate acceptable
+W_COOLDOWN = 0.10             # no per-symbol cooldown
+SCORE_THRESHOLD = 0.50        # minimum score to generate signal
+
+# ── Hard-block thresholds ───────────────────────────────────
+HARD_FUNDING_RATE = 0.001     # extreme funding → always block
+HARD_COOLDOWN_FRESHNESS = 600 # block if loss < 10 min ago
 
 
 # ── Data classes ─────────────────────────────────────────────
@@ -225,31 +244,35 @@ class MeanReversionStrategy(Strategy):
         bb_upper: float,
         bb_pct: float,
     ) -> tuple[str, float]:
+        """Classify signal using OR logic (either RSI or BB triggers classification)."""
         if rsi is None:
             return "NEUTRAL", 0.0
 
-        if rsi < RSI_OVERSOLD and price <= bb_lower * 1.005:
-            rsi_strength = max(0.0, (RSI_OVERSOLD - rsi) / RSI_OVERSOLD)
-            bb_strength = max(0.0, 1.0 - bb_pct)
-            strength = min(1.0, (rsi_strength + bb_strength) / 2)
+        rsi_oversold = rsi < RSI_OVERSOLD
+        bb_oversold = price <= bb_lower * 1.005
+
+        if rsi_oversold or bb_oversold:
+            parts: list[float] = []
+            if rsi_oversold:
+                parts.append(max(0.0, (RSI_OVERSOLD - rsi) / RSI_OVERSOLD))
+            if bb_oversold:
+                parts.append(max(0.0, 1.0 - bb_pct))
+            strength = min(1.0, sum(parts) / len(parts))
             return "OVERSOLD", round(strength, 3)
 
-        if rsi > RSI_OVERBOUGHT and price >= bb_upper * 0.995:
-            rsi_strength = max(0.0, (rsi - RSI_OVERBOUGHT) / (100 - RSI_OVERBOUGHT))
-            bb_strength = max(0.0, bb_pct - 1.0 + 1.0)
-            strength = min(1.0, (rsi_strength + bb_strength) / 2)
+        rsi_overbought = rsi > RSI_OVERBOUGHT
+        bb_overbought = price >= bb_upper * 0.995
+
+        if rsi_overbought or bb_overbought:
+            parts = []
+            if rsi_overbought:
+                parts.append(max(0.0, (rsi - RSI_OVERBOUGHT) / (100 - RSI_OVERBOUGHT)))
+            if bb_overbought:
+                parts.append(min(1.0, bb_pct))
+            strength = min(1.0, sum(parts) / len(parts))
             return "OVERBOUGHT", round(strength, 3)
 
         return "NEUTRAL", 0.0
-
-    # ── Funding rate check ────────────────────────────────────
-
-    def _funding_ok(self, symbol: str) -> bool:
-        """Check if funding rate is acceptable for entry."""
-        rate = self._funding_rates.get(symbol)
-        if rate is None:
-            return True  # no data = allow
-        return abs(rate) < self._max_funding_rate
 
     # ── Autonomous decision generation ───────────────────────
 
@@ -357,51 +380,79 @@ class MeanReversionStrategy(Strategy):
         )
 
     def _check_long_entry(self, symbol: str, sig: Signal) -> Decision | None:
-        """Check if a new LONG entry is warranted. ALL conditions must be true."""
-        # BB position label for diagnostics
-        bb_pos = "below_BB" if (sig.price and sig.bb_lower and sig.price <= sig.bb_lower * 1.005) else (
-            "above_BB" if (sig.price and sig.bb_upper and sig.price >= sig.bb_upper * 0.995) else "inside_BB"
-        )
-        diag = (
-            f"trend={sig.trend}, RSI_15m={f'{sig.rsi:.1f}' if sig.rsi is not None else 'N/A'}, "
-            f"BB={bb_pos}, vol_ratio={sig.volume_ratio if sig.volume_ratio else 'N/A'}, "
-            f"RSI_1h={f'{sig.rsi_1h:.1f}' if sig.rsi_1h is not None else 'N/A'}"
-        )
-
-        # Trend filter removed — AI does fine filtering on trend
-        if sig.rsi is None or sig.rsi >= RSI_OVERSOLD:
-            logger.debug("[MR LONG] %s: %s → SKIP: RSI >= %.0f", symbol, diag, RSI_OVERSOLD)
-            return None
-        if sig.price is None or sig.bb_lower is None or sig.price > sig.bb_lower * 1.005:
-            logger.debug("[MR LONG] %s: %s → SKIP: price not near lower BB", symbol, diag)
-            return None
-        if sig.volume_ratio is not None and sig.volume_ratio < MIN_VOLUME_RATIO:
-            logger.debug("[MR LONG] %s: %s → SKIP: vol_ratio < %.1f", symbol, diag, MIN_VOLUME_RATIO)
-            return None
-        if sig.rsi_1h is not None and sig.rsi_1h >= RSI_1H_MAX:
-            logger.debug("[MR LONG] %s: %s → SKIP: RSI_1h >= %.0f", symbol, diag, RSI_1H_MAX)
-            return None
-        if not self._funding_ok(symbol):
-            logger.debug("[MR LONG] %s: %s → SKIP: high funding rate", symbol, diag)
+        """Score-based LONG entry. Score >= 0.50 generates a signal for AI review."""
+        if sig.rsi is None or sig.price is None or sig.bb_lower is None:
             return None
 
-        can_buy, reason = self._cooldown.can_buy(symbol)
+        # ── Hard blocks ──────────────────────────────────────
+        funding_rate = abs(self._funding_rates.get(symbol, 0.0))
+        if funding_rate >= HARD_FUNDING_RATE:
+            logger.debug("[MR LONG] %s → HARD BLOCK: extreme funding %.4f", symbol, funding_rate)
+            return None
+
+        if self._cooldown.is_global_cooldown_active():
+            logger.debug("[MR LONG] %s → HARD BLOCK: global cooldown", symbol)
+            return None
+
+        can_buy, _cd_reason = self._cooldown.can_buy(symbol)
         if not can_buy:
-            logger.debug("[MR LONG] %s: %s → SKIP: %s", symbol, diag, reason)
+            remaining = self._cooldown.get_symbol_cooldown_remaining(symbol)
+            time_since = self._rc.symbol_cooldown_sec - remaining
+            if time_since < HARD_COOLDOWN_FRESHNESS:
+                logger.debug("[MR LONG] %s → HARD BLOCK: fresh cooldown (%ds ago)", symbol, int(time_since))
+                return None
+
+        # ── Scoring ──────────────────────────────────────────
+        score = 0.0
+        components: list[str] = []
+
+        if sig.rsi < RSI_OVERSOLD:
+            score += W_RSI
+            components.append(f"RSI={sig.rsi:.1f}<{RSI_OVERSOLD:.0f}")
+
+        if sig.price <= sig.bb_lower * 1.005:
+            score += W_BB
+            components.append("below_BB")
+
+        if sig.volume_ratio is not None and sig.volume_ratio >= MIN_VOLUME_RATIO:
+            score += W_VOLUME
+            components.append(f"vol={sig.volume_ratio:.1f}")
+
+        if sig.rsi_1h is not None and sig.rsi_1h < RSI_1H_MAX:
+            score += W_MACRO_RSI
+            components.append(f"RSI_1h={sig.rsi_1h:.1f}")
+
+        if funding_rate < self._max_funding_rate:
+            score += W_FUNDING
+            components.append("funding_ok")
+
+        if can_buy:
+            score += W_COOLDOWN
+            components.append("no_cd")
+
+        score = round(score, 2)
+
+        if score < SCORE_THRESHOLD:
+            logger.debug(
+                "[MR LONG] %s: score=%.2f < %.2f — RSI=%.1f, BB%%=%.2f, vol=%s, RSI_1h=%s",
+                symbol, score, SCORE_THRESHOLD, sig.rsi, sig.bb_pct,
+                f"{sig.volume_ratio:.1f}" if sig.volume_ratio else "N/A",
+                f"{sig.rsi_1h:.1f}" if sig.rsi_1h else "N/A",
+            )
             return None
 
-        logger.debug("[MR LONG] %s: %s → SIGNAL GENERATED", symbol, diag)
+        vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
+        rsi_1h_str = f"{sig.rsi_1h:.1f}" if sig.rsi_1h is not None else "N/A"
+
+        logger.debug("[MR LONG] %s: score=%.2f — %s", symbol, score, ", ".join(components))
         return Decision(
             action="BUY",
             symbol=symbol,
-            confidence=min(0.8, 0.5 + sig.strength * 0.3),
+            confidence=score,
             reasoning=(
-                f"[MeanRev LONG] {symbol}: RSI={sig.rsi:.1f}, "
-                f"BB%={sig.bb_pct:.2f}, vol_ratio={sig.volume_ratio:.1f}, "
-                f"trend={sig.trend}, RSI_1h={sig.rsi_1h:.1f}" if sig.rsi_1h else
-                f"[MeanRev LONG] {symbol}: RSI={sig.rsi:.1f}, "
-                f"BB%={sig.bb_pct:.2f}, vol_ratio={sig.volume_ratio:.1f}, "
-                f"trend={sig.trend}"
+                f"[MeanRev LONG] {symbol}: score={score:.2f} — "
+                f"RSI={sig.rsi:.1f}, BB%={sig.bb_pct:.2f}, "
+                f"vol={vol_str}, RSI_1h={rsi_1h_str}, trend={sig.trend}"
             ),
             strategy_type="mean_reversion",
             size_pct=10.0,
@@ -409,50 +460,79 @@ class MeanReversionStrategy(Strategy):
         )
 
     def _check_short_entry(self, symbol: str, sig: Signal) -> Decision | None:
-        """Check if a new SHORT entry is warranted. ALL conditions must be true."""
-        bb_pos = "below_BB" if (sig.price and sig.bb_lower and sig.price <= sig.bb_lower * 1.005) else (
-            "above_BB" if (sig.price and sig.bb_upper and sig.price >= sig.bb_upper * 0.995) else "inside_BB"
-        )
-        diag = (
-            f"trend={sig.trend}, RSI_15m={f'{sig.rsi:.1f}' if sig.rsi is not None else 'N/A'}, "
-            f"BB={bb_pos}, vol_ratio={sig.volume_ratio if sig.volume_ratio else 'N/A'}, "
-            f"RSI_1h={f'{sig.rsi_1h:.1f}' if sig.rsi_1h is not None else 'N/A'}"
-        )
-
-        # Trend filter removed — AI does fine filtering on trend
-        if sig.rsi is None or sig.rsi <= RSI_OVERBOUGHT_ENTRY:
-            logger.debug("[MR SHORT] %s: %s → SKIP: RSI <= %.0f", symbol, diag, RSI_OVERBOUGHT_ENTRY)
-            return None
-        if sig.price is None or sig.bb_upper is None or sig.price < sig.bb_upper * 0.995:
-            logger.debug("[MR SHORT] %s: %s → SKIP: price not near upper BB", symbol, diag)
-            return None
-        if sig.volume_ratio is not None and sig.volume_ratio < MIN_VOLUME_RATIO:
-            logger.debug("[MR SHORT] %s: %s → SKIP: vol_ratio < %.1f", symbol, diag, MIN_VOLUME_RATIO)
-            return None
-        if sig.rsi_1h is not None and sig.rsi_1h <= RSI_1H_MIN_SHORT:
-            logger.debug("[MR SHORT] %s: %s → SKIP: RSI_1h <= %.0f", symbol, diag, RSI_1H_MIN_SHORT)
-            return None
-        if not self._funding_ok(symbol):
-            logger.debug("[MR SHORT] %s: %s → SKIP: high funding rate", symbol, diag)
+        """Score-based SHORT entry. Score >= 0.50 generates a signal for AI review."""
+        if sig.rsi is None or sig.price is None or sig.bb_upper is None:
             return None
 
-        can_buy, reason = self._cooldown.can_buy(symbol)
+        # ── Hard blocks ──────────────────────────────────────
+        funding_rate = abs(self._funding_rates.get(symbol, 0.0))
+        if funding_rate >= HARD_FUNDING_RATE:
+            logger.debug("[MR SHORT] %s → HARD BLOCK: extreme funding %.4f", symbol, funding_rate)
+            return None
+
+        if self._cooldown.is_global_cooldown_active():
+            logger.debug("[MR SHORT] %s → HARD BLOCK: global cooldown", symbol)
+            return None
+
+        can_buy, _cd_reason = self._cooldown.can_buy(symbol)
         if not can_buy:
-            logger.debug("[MR SHORT] %s: %s → SKIP: %s", symbol, diag, reason)
+            remaining = self._cooldown.get_symbol_cooldown_remaining(symbol)
+            time_since = self._rc.symbol_cooldown_sec - remaining
+            if time_since < HARD_COOLDOWN_FRESHNESS:
+                logger.debug("[MR SHORT] %s → HARD BLOCK: fresh cooldown (%ds ago)", symbol, int(time_since))
+                return None
+
+        # ── Scoring ──────────────────────────────────────────
+        score = 0.0
+        components: list[str] = []
+
+        if sig.rsi > RSI_OVERBOUGHT_ENTRY:
+            score += W_RSI
+            components.append(f"RSI={sig.rsi:.1f}>{RSI_OVERBOUGHT_ENTRY:.0f}")
+
+        if sig.price >= sig.bb_upper * 0.995:
+            score += W_BB
+            components.append("above_BB")
+
+        if sig.volume_ratio is not None and sig.volume_ratio >= MIN_VOLUME_RATIO:
+            score += W_VOLUME
+            components.append(f"vol={sig.volume_ratio:.1f}")
+
+        if sig.rsi_1h is not None and sig.rsi_1h > RSI_1H_MIN_SHORT:
+            score += W_MACRO_RSI
+            components.append(f"RSI_1h={sig.rsi_1h:.1f}")
+
+        if funding_rate < self._max_funding_rate:
+            score += W_FUNDING
+            components.append("funding_ok")
+
+        if can_buy:
+            score += W_COOLDOWN
+            components.append("no_cd")
+
+        score = round(score, 2)
+
+        if score < SCORE_THRESHOLD:
+            logger.debug(
+                "[MR SHORT] %s: score=%.2f < %.2f — RSI=%.1f, BB%%=%.2f, vol=%s, RSI_1h=%s",
+                symbol, score, SCORE_THRESHOLD, sig.rsi, sig.bb_pct,
+                f"{sig.volume_ratio:.1f}" if sig.volume_ratio else "N/A",
+                f"{sig.rsi_1h:.1f}" if sig.rsi_1h else "N/A",
+            )
             return None
 
-        logger.debug("[MR SHORT] %s: %s → SIGNAL GENERATED", symbol, diag)
+        vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
+        rsi_1h_str = f"{sig.rsi_1h:.1f}" if sig.rsi_1h is not None else "N/A"
+
+        logger.debug("[MR SHORT] %s: score=%.2f — %s", symbol, score, ", ".join(components))
         return Decision(
             action="SHORT",
             symbol=symbol,
-            confidence=min(0.8, 0.5 + sig.strength * 0.3),
+            confidence=score,
             reasoning=(
-                f"[MeanRev SHORT] {symbol}: RSI={sig.rsi:.1f}, "
-                f"BB%={sig.bb_pct:.2f}, vol_ratio={sig.volume_ratio:.1f}, "
-                f"trend={sig.trend}, RSI_1h={sig.rsi_1h:.1f}" if sig.rsi_1h else
-                f"[MeanRev SHORT] {symbol}: RSI={sig.rsi:.1f}, "
-                f"BB%={sig.bb_pct:.2f}, vol_ratio={sig.volume_ratio:.1f}, "
-                f"trend={sig.trend}"
+                f"[MeanRev SHORT] {symbol}: score={score:.2f} — "
+                f"RSI={sig.rsi:.1f}, BB%={sig.bb_pct:.2f}, "
+                f"vol={vol_str}, RSI_1h={rsi_1h_str}, trend={sig.trend}"
             ),
             strategy_type="mean_reversion",
             size_pct=10.0,
@@ -472,6 +552,7 @@ class MeanReversionStrategy(Strategy):
                 confidence=decision.confidence,
                 reasoning=decision.reasoning,
                 details={
+                    "score": decision.confidence,
                     "rsi": round(sig.rsi, 2) if sig.rsi is not None else None,
                     "rsi_1h": round(sig.rsi_1h, 2) if sig.rsi_1h is not None else None,
                     "bb_pct": sig.bb_pct,

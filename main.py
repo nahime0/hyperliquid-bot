@@ -364,6 +364,7 @@ class Bot:
             logger.info("No trading candidates this cycle")
 
         # 5b. Check deferred opportunities
+        ready_symbols: set[str] = set()
         if not self._no_ai:
             self._advisor.set_cycle(self._cycle_count)
             mid_prices = {
@@ -450,6 +451,22 @@ class Bot:
                     ) if d.symbol else {},
                 }
                 opportunities.append(opp)
+
+        # Cap opportunities to top 10 by score; deferred-ready always pass through
+        MAX_OPPORTUNITIES_PER_CYCLE = 10
+        if len(opportunities) > MAX_OPPORTUNITIES_PER_CYCLE:
+            deferred_ready_opps = [o for o in opportunities if o["symbol"] in ready_symbols]
+            regular_opps = [o for o in opportunities if o["symbol"] not in ready_symbols]
+            regular_opps.sort(key=lambda o: o["confidence"], reverse=True)
+            remaining_slots = max(0, MAX_OPPORTUNITIES_PER_CYCLE - len(deferred_ready_opps))
+            dropped = len(regular_opps) - remaining_slots
+            opportunities = deferred_ready_opps + regular_opps[:remaining_slots]
+            if dropped > 0:
+                logger.info(
+                    "Capped opportunities: %d sent (deferred_ready=%d, top_scored=%d, dropped=%d)",
+                    len(opportunities), len(deferred_ready_opps),
+                    min(remaining_slots, len(regular_opps)), dropped,
+                )
 
         # Filter out positions with deferred holds
         positions_for_ai = open_positions
