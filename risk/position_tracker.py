@@ -65,10 +65,11 @@ class PositionTracker:
         )
         await self._db.db.commit()
         pos_id = cursor.lastrowid
+        tp_str = f"{take_profit:.4f}" if take_profit else "None"
         logger.info(
-            "Position opened #%d: %s %s qty=%.6f @ %.4f SL=%.4f TP=%.4f lev=%dx",
+            "Position opened #%d: %s %s qty=%.6f @ %.4f SL=%.4f TP=%s lev=%dx",
             pos_id, direction, symbol, quantity, entry_price,
-            stop_loss or 0, take_profit or 0, leverage,
+            stop_loss or 0, tp_str, leverage,
         )
         return pos_id  # type: ignore[return-value]
 
