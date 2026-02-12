@@ -110,6 +110,7 @@ class Bot:
             settings.risk,
             interval=settings.strategy.mr_interval,
             min_candle_volume_usdc=settings.strategy.min_candle_volume_usdc,
+            db=self._db,
         )
         self._rsi_div = RSIDivergenceStrategy(
             self._market_data,
@@ -118,6 +119,7 @@ class Bot:
             self._positions,
             settings.risk,
             settings.strategy,
+            db=self._db,
         )
 
         # Build active strategy based on mode
@@ -181,6 +183,13 @@ class Bot:
             max_coins=market_cfg.max_coins,
         )
         logger.info("Active coins: %d", len(self._active_coins))
+
+        # Register coins in DB
+        for coin in self._active_coins:
+            try:
+                await self._db.upsert_coin(coin)
+            except Exception:
+                logger.debug("Failed to upsert coin %s", coin, exc_info=True)
 
         # Set default leverage only for coins WITHOUT open positions
         # (coins with positions keep their current leverage from HL)
@@ -329,6 +338,19 @@ class Bot:
     async def _tick(self) -> None:
         """One iteration of the main loop."""
         logger.info("─── Cycle #%d ───", self._cycle_count)
+        cycle_start = time.monotonic()
+
+        # Propagate cycle count
+        self._risk.set_cycle(self._cycle_count)
+        self._positions.set_cycle(self._cycle_count)
+        if hasattr(self._strategy, "set_cycle"):
+            self._strategy.set_cycle(self._cycle_count)
+
+        # Cycle event counters
+        _signals_generated = 0
+        _decisions_approved = 0
+        _decisions_blocked = 0
+        _trades_executed = 0
 
         # 1. Refresh risk state
         await self._risk.refresh()
@@ -352,6 +374,8 @@ class Bot:
 
         # 5. Generate autonomous decisions
         candidates = await self._strategy.generate_decisions()
+
+        _signals_generated = sum(1 for d in candidates if d.action in ("BUY", "SHORT"))
 
         if candidates:
             logger.info(
@@ -489,6 +513,36 @@ class Bot:
                 deferred=deferred_summary,
             )
 
+            # Log AI review events for positions
+            for pa in ai_response.get("positions", []):
+                ev_type = "DEFERRED" if pa.get("defer") else "AI_REVIEW"
+                try:
+                    await self._db.insert_event(
+                        cycle=self._cycle_count,
+                        symbol=pa["symbol"],
+                        event_type=ev_type,
+                        source="ai_advisor",
+                        action=pa["action"],
+                        reasoning=pa.get("reasoning"),
+                    )
+                except Exception:
+                    logger.debug("Failed to log %s event", ev_type, exc_info=True)
+
+            # Log AI review events for opportunities
+            for oa in ai_response.get("opportunities", []):
+                ev_type = "DEFERRED" if oa["action"] == "HOLD" else "AI_REVIEW"
+                try:
+                    await self._db.insert_event(
+                        cycle=self._cycle_count,
+                        symbol=oa["symbol"],
+                        event_type=ev_type,
+                        source="ai_advisor",
+                        action=oa["action"],
+                        reasoning=oa.get("reasoning"),
+                    )
+                except Exception:
+                    logger.debug("Failed to log %s event", ev_type, exc_info=True)
+
             # Process position actions from AI
             for pa in ai_response.get("positions", []):
                 if pa["action"] == "CLOSE":
@@ -595,11 +649,15 @@ class Bot:
             validation = await self._risk.validate_decision(decision)
             if not validation.approved:
                 logger.info("Risk Manager blocked: %s", validation.reason)
+                _decisions_blocked += 1
                 continue
+            _decisions_approved += 1
             decision = validation.decision
             size = validation.size
 
             pnl = await self._execute(decision, size)
+            if pnl is not None or decision.action in ("BUY", "SHORT", "SCALE_UP"):
+                _trades_executed += 1
 
             if decision.action in ("SELL", "CLOSE") and decision.symbol:
                 closed_this_cycle.add(decision.symbol)
@@ -623,6 +681,28 @@ class Bot:
 
         # 11. Write live status for dashboard
         self._write_status(metrics)
+
+        # 12. Cycle summary
+        try:
+            duration = time.monotonic() - cycle_start
+            await self._db.insert_cycle_summary(
+                cycle=self._cycle_count,
+                duration_sec=round(duration, 2),
+                balance_usdc=metrics.get("current_balance"),
+                drawdown_pct=metrics.get("drawdown_pct"),
+                daily_drawdown_pct=metrics.get("daily_drawdown_pct"),
+                open_positions=metrics.get("open_positions"),
+                capital_utilization=metrics.get("capital_utilization"),
+                coins_monitored=len(self._active_coins),
+                signals_generated=_signals_generated,
+                decisions_approved=_decisions_approved,
+                decisions_blocked=_decisions_blocked,
+                trades_executed=_trades_executed,
+                kill_switch=metrics.get("kill_switch", False),
+                daily_paused=metrics.get("daily_paused", False),
+            )
+        except Exception:
+            logger.debug("Failed to write cycle summary", exc_info=True)
 
     # ── Funding rate refresh ──────────────────────────────────
 
@@ -766,6 +846,16 @@ class Bot:
                 await self._telegram.notify_trade(
                     action="CLOSE", symbol=symbol, qty=pos["quantity"], price=price,
                 )
+                try:
+                    await self._db.insert_event(
+                        cycle=self._cycle_count, symbol=symbol,
+                        event_type="SL_TP_TRIGGER", source="auto_close",
+                        action="CLOSE", reasoning=reason,
+                        details={"price": round(price, 6), "pnl": round(pnl, 4), "paper": True},
+                        position_id=pos["id"],
+                    )
+                except Exception:
+                    logger.debug("Failed to log SL_TP_TRIGGER event", exc_info=True)
             else:
                 try:
                     await self._client.close_position(symbol)
@@ -783,6 +873,16 @@ class Bot:
                         "Auto-closed %s %s: %s @ %.4f PnL=%.4f",
                         direction, symbol, reason, price, pnl,
                     )
+                    try:
+                        await self._db.insert_event(
+                            cycle=self._cycle_count, symbol=symbol,
+                            event_type="SL_TP_TRIGGER", source="auto_close",
+                            action="CLOSE", reasoning=reason,
+                            details={"price": round(price, 6), "pnl": round(pnl, 4)},
+                            position_id=pos["id"],
+                        )
+                    except Exception:
+                        logger.debug("Failed to log SL_TP_TRIGGER event", exc_info=True)
                 except Exception:
                     logger.exception("Failed to auto-close %s", symbol)
 
@@ -908,6 +1008,15 @@ class Bot:
                 symbol=symbol, side="BUY", price=price, quantity=qty,
                 strategy=decision.strategy_type or "mean_reversion", notes="[PAPER]",
             )
+            try:
+                await self._db.insert_event(
+                    cycle=self._cycle_count, symbol=symbol,
+                    event_type="TRADE_ENTRY", source="execution", action="BUY",
+                    confidence=decision.confidence,
+                    details={"price": round(price, 6), "quantity": qty, "paper": True},
+                )
+            except Exception:
+                logger.debug("Failed to log TRADE_ENTRY event", exc_info=True)
             return None
 
         elif decision.action == "SHORT":
@@ -924,6 +1033,15 @@ class Bot:
                 symbol=symbol, side="SHORT", price=price, quantity=qty,
                 strategy=decision.strategy_type or "mean_reversion", notes="[PAPER]",
             )
+            try:
+                await self._db.insert_event(
+                    cycle=self._cycle_count, symbol=symbol,
+                    event_type="TRADE_ENTRY", source="execution", action="SHORT",
+                    confidence=decision.confidence,
+                    details={"price": round(price, 6), "quantity": qty, "paper": True},
+                )
+            except Exception:
+                logger.debug("Failed to log TRADE_ENTRY event", exc_info=True)
             return None
 
         elif decision.action == "SCALE_UP":
@@ -942,6 +1060,15 @@ class Bot:
                         strategy="ai_advisor", notes="[PAPER] SCALE_UP",
                     )
                     logger.info("[PAPER] SCALE_UP %s %s +%.6f @ %.4f", direction, symbol, qty, price)
+                    try:
+                        await self._db.insert_event(
+                            cycle=self._cycle_count, symbol=symbol,
+                            event_type="POSITION_SCALED", source="execution", action="SCALE_UP",
+                            details={"price": round(price, 6), "quantity": qty, "paper": True},
+                            position_id=pos["id"],
+                        )
+                    except Exception:
+                        logger.debug("Failed to log POSITION_SCALED event", exc_info=True)
             return None
 
         elif decision.action in ("SELL", "CLOSE"):
@@ -953,6 +1080,15 @@ class Bot:
                     quantity=pos["quantity"], pnl=pnl,
                     strategy=decision.strategy_type or "mean_reversion", notes="[PAPER]",
                 )
+                try:
+                    await self._db.insert_event(
+                        cycle=self._cycle_count, symbol=symbol,
+                        event_type="TRADE_EXIT", source="execution", action="CLOSE",
+                        details={"price": round(price, 6), "pnl": round(pnl, 4), "paper": True},
+                        position_id=pos["id"],
+                    )
+                except Exception:
+                    logger.debug("Failed to log TRADE_EXIT event", exc_info=True)
                 return pnl
             else:
                 await self._db.insert_trade(
@@ -1017,6 +1153,25 @@ class Bot:
             action_name, symbol, qty, price,
             decision.stop_loss or 0, decision.take_profit or 0, leverage,
         )
+        try:
+            await self._db.insert_event(
+                cycle=self._cycle_count,
+                symbol=symbol,
+                event_type="TRADE_ENTRY",
+                source="execution",
+                action=action_name,
+                confidence=decision.confidence,
+                details={
+                    "price": round(price, 6),
+                    "quantity": qty,
+                    "leverage": leverage,
+                    "stop_loss": decision.stop_loss,
+                    "take_profit": decision.take_profit,
+                    "strategy": decision.strategy_type,
+                },
+            )
+        except Exception:
+            logger.debug("Failed to log TRADE_ENTRY event", exc_info=True)
         return None
 
     async def _execute_scale_up(self, decision: Decision, size: Any) -> float | None:
@@ -1071,6 +1226,23 @@ class Bot:
             "SCALE_UP executed: %s %s +%.6f @ %.4f lev=%dx",
             direction, symbol, qty, price, leverage,
         )
+        try:
+            await self._db.insert_event(
+                cycle=self._cycle_count,
+                symbol=symbol,
+                event_type="POSITION_SCALED",
+                source="execution",
+                action="SCALE_UP",
+                details={
+                    "direction": direction,
+                    "price": round(price, 6),
+                    "quantity": qty,
+                    "leverage": leverage,
+                },
+                position_id=pos["id"],
+            )
+        except Exception:
+            logger.debug("Failed to log POSITION_SCALED event", exc_info=True)
         return None
 
     async def _execute_close(self, decision: Decision) -> float | None:
@@ -1109,6 +1281,24 @@ class Bot:
             symbol, fill_price,
             f"{pnl:.4f}" if pnl is not None else "N/A",
         )
+        try:
+            await self._db.insert_event(
+                cycle=self._cycle_count,
+                symbol=symbol,
+                event_type="TRADE_EXIT",
+                source="execution",
+                action="CLOSE",
+                details={
+                    "price": round(fill_price, 6),
+                    "pnl": round(pnl, 4) if pnl is not None else None,
+                    "quantity": pos["quantity"] if pos else 0,
+                    "strategy": decision.strategy_type,
+                    "reasoning": decision.reasoning[:200] if decision.reasoning else None,
+                },
+                position_id=pos["id"] if pos else None,
+            )
+        except Exception:
+            logger.debug("Failed to log TRADE_EXIT event", exc_info=True)
         return pnl
 
 
