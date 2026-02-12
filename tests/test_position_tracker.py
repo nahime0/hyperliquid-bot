@@ -201,6 +201,17 @@ class TestSlTp:
         assert len(to_close) == 0
 
     @pytest.mark.asyncio
+    async def test_check_sl_tp_no_tp_set(self, position_tracker):
+        """TP=None should never trigger a close."""
+        await position_tracker.open_position(
+            symbol="ETH", entry_price=2000, quantity=0.5,
+            stop_loss=1960, take_profit=None, direction="LONG",
+        )
+        # Price way above entry — should NOT trigger TP close (no TP set)
+        to_close = await position_tracker.check_sl_tp({"ETH": 5000})
+        assert len(to_close) == 0
+
+    @pytest.mark.asyncio
     async def test_check_sl_tp_missing_price_skipped(self, position_tracker):
         await position_tracker.open_position(
             symbol="ETH", entry_price=2000, quantity=0.5,

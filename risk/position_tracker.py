@@ -137,7 +137,7 @@ class PositionTracker:
 
             # Check stop loss (includes trailing SL)
             effective_sl = pos.get("trailing_sl") or pos.get("stop_loss")
-            if effective_sl:
+            if effective_sl is not None:
                 sl_triggered = False
                 if direction == "LONG" and price <= effective_sl:
                     sl_triggered = True
@@ -159,7 +159,7 @@ class PositionTracker:
                     continue
 
             # Check take profit (direction-aware)
-            if pos["take_profit"]:
+            if pos["take_profit"] is not None and pos["take_profit"] > 0:
                 tp_triggered = False
                 if direction == "LONG" and price >= pos["take_profit"]:
                     tp_triggered = True
