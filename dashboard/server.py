@@ -46,10 +46,12 @@ class DashboardState:
         self._db = await aiosqlite.connect(
             str(self._db_path),
             uri=True,
+            timeout=30,
         )
         self._db.row_factory = aiosqlite.Row
-        # Enable WAL for concurrent reads
+        # WAL mode + busy timeout for concurrent access with bot
         await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA busy_timeout=5000")
 
     async def close(self) -> None:
         if self._db:

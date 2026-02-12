@@ -113,8 +113,11 @@ class Database:
 
     async def connect(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = await aiosqlite.connect(str(self._db_path))
+        self._db = await aiosqlite.connect(str(self._db_path), timeout=30)
         self._db.row_factory = aiosqlite.Row
+        # WAL mode: allows concurrent reads while writing
+        await self._db.execute("PRAGMA journal_mode=WAL")
+        await self._db.execute("PRAGMA busy_timeout=5000")
         await self._db.executescript(_SCHEMA)
         await self._db.commit()
         # Run migrations (safe to re-run — duplicate column errors are silenced)
