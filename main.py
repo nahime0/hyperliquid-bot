@@ -326,9 +326,9 @@ class Bot:
                 break
 
             elapsed = time.monotonic() - cycle_start
-            sleep_time = max(0, interval - elapsed)
+            sleep_time = interval  # wait full interval after tick completes (incl. AI)
             if sleep_time > 0:
-                logger.debug("Cycle #%d took %.1fs — sleeping %.1fs", self._cycle_count, elapsed, sleep_time)
+                logger.debug("Cycle #%d took %.1fs — sleeping %.0fs", self._cycle_count, elapsed, sleep_time)
                 try:
                     await asyncio.wait_for(self._shutdown_event.wait(), timeout=sleep_time)
                     break

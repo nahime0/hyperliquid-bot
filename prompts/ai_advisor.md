@@ -80,7 +80,7 @@ The `account` object includes capital utilization data:
 - Max 15 open positions at a time, target ~50% capital utilization
 - Never approve entries if daily PnL is below -3%
 - Reduce position sizes (lower size_pct) during losing streaks (3+ consecutive losses)
-- Prefer HOLD over marginal entries (confidence < 0.65)
+- Prefer HOLD over marginal entries (confidence < 0.6)
 - Consider correlation: avoid overexposure to similar assets
 - Leverage should stay between 1x-3x for conservative risk management
 
