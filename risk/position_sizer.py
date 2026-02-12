@@ -101,7 +101,7 @@ class PositionSizer:
                 size_pct = max_pct
                 capped = True
 
-            size_usdc = bankroll * (size_pct / 100)
+            size_usdc = round(bankroll * (size_pct / 100), 2)
 
             if size_usdc < MIN_ORDER_USDC:
                 return SizeResult(
@@ -160,7 +160,7 @@ class PositionSizer:
             capped = True
 
         # Floor: ensure minimum viable trade during Kelly mode too
-        size_usdc = bankroll * (size_pct / 100)
+        size_usdc = round(bankroll * (size_pct / 100), 2)
         if size_usdc < MIN_ORDER_USDC:
             # If Kelly says too small, fall back to minimum viable size
             min_pct = (MIN_ORDER_USDC / bankroll) * 100 if bankroll > 0 else 0

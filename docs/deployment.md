@@ -5,6 +5,7 @@
 - **Python 3.11+** (testato con 3.14)
 - **pip** per installazione dipendenze
 - **Wallet Hyperliquid** con fondi su testnet o mainnet
+- **Node.js 18+** per la dashboard Next.js (opzionale)
 - **API Key Anthropic** per il motore AI (opzionale con `--no-ai`)
 
 ## Installazione locale
@@ -58,8 +59,8 @@ print('BTC mid:', info.all_mids().get('BTC'))
 ## Primo avvio
 
 ```bash
-# 1. Test veloce (paper + no AI + singolo ciclo + no dashboard)
-.venv/bin/python main.py --paper --no-ai --once --no-dashboard
+# 1. Test veloce (paper + no AI + singolo ciclo)
+.venv/bin/python main.py --paper --no-ai --once
 
 # 2. Test con AI review
 .venv/bin/python main.py --paper --once
@@ -154,13 +155,16 @@ docker run -d --name trading-bot --env-file .env trading-bot
 
 ## Monitoring
 
-### Dashboard web
+### Dashboard web (Next.js)
 
-La dashboard si avvia automaticamente con il bot su porta 8080. Accessibile via browser.
+La dashboard e' un'applicazione Next.js separata nella cartella `web/`. Legge il database SQLite in read-only (WAL mode) tramite `better-sqlite3` e il file `data/bot_status.json` per lo stato live. Auto-refresh via SWR polling (nessun WebSocket necessario).
 
 ```bash
-# Solo dashboard (senza bot)
-.venv/bin/python -m dashboard.server --port 8080
+# Sviluppo (porta 3000)
+cd web && npm install && npm run dev
+
+# Produzione
+cd web && npm run build && npm start
 ```
 
 ### Log
@@ -198,7 +202,7 @@ SELECT * FROM positions WHERE status='OPEN';
 - **Private key:** Non committare `.env` nel repository. Usa `.gitignore`.
 - **API wallet:** Su Hyperliquid, crea un API wallet dedicato con limiti di prelievo.
 - **Network:** Il bot necessita di connessione HTTPS verso `api.hyperliquid.xyz` o `api.hyperliquid-testnet.xyz`.
-- **Firewall:** Se la dashboard e' esposta, limitare l'accesso alla rete locale o usare un reverse proxy con autenticazione.
+- **Firewall:** Se la dashboard Next.js e' esposta, limitare l'accesso alla rete locale o usare un reverse proxy con autenticazione.
 
 ## Upgrade
 
@@ -220,5 +224,5 @@ Le migrazioni del database vengono applicate automaticamente all'avvio.
 | `RuntimeError: Client not connected` | Assicurarsi che `connect()` venga chiamato prima di operare |
 | Kill switch attivato | Reset manuale necessario, verificare drawdown |
 | `No mid price for X` | Il coin potrebbe non essere disponibile su Hyperliquid |
-| Dashboard non si apre | Verificare che la porta 8080 non sia occupata |
+| Dashboard non si apre | Verificare che la porta 3000 non sia occupata (`lsof -i :3000`) |
 | `szDecimals not found` | Il coin non e' nella universe di Hyperliquid |

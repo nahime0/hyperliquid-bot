@@ -51,7 +51,7 @@ Il bot implementa un loop continuo che ogni 60 secondi:
 - **Risk management rigoroso**: kill switch, pausa giornaliera, Kelly Criterion per il sizing, trailing stop, time stop
 - **Leva conservativa**: 2-3x con cross margin
 - **Fee ultra-basse**: 0.06% round-trip (vs 0.15% su Binance Spot)
-- **Dashboard web**: monitoraggio real-time via browser con WebSocket
+- **Dashboard web**: monitoraggio real-time via Next.js (in `web/`)
 - **Notifiche Telegram**: alert su trade eseguiti e condizioni critiche
 - **Discovery automatica**: scopre fino a 60 coin perpetual in base al volume
 
@@ -106,9 +106,9 @@ Il bot implementa un loop continuo che ogni 60 secondi:
     ┌─────────▼─────────┐    ┌───────────────────┐
     │    DATABASE        │    │   DASHBOARD       │
     │                    │    │                   │
-    │  SQLite (aiosqlite)│    │  aiohttp Server   │
-    │  Trades, Positions │    │  WebSocket 2s     │
-    │  Balance Snapshots │    │  Dark Theme       │
+    │  SQLite (aiosqlite)│    │  Next.js (web/)   │
+    │  Trades, Positions │    │  SQLite readonly  │
+    │  Balance Snapshots │    │  bot_status.json  │
     └───────────────────┘    └───────────────────┘
 ```
 
@@ -121,7 +121,7 @@ Il bot implementa un loop continuo che ogni 60 secondi:
 | AI Advisor | Claude Code CLI (structured JSON) |
 | Indicatori | `ta` library (RSI, BB, MACD, EMA) |
 | Dati | `pandas` per time series, `aiosqlite` per persistenza |
-| Dashboard | `aiohttp` (HTTP + WebSocket) |
+| Dashboard | Next.js (in `web/`, standalone) |
 | Notifiche | Telegram Bot API via `aiohttp` |
 | Auth | `eth-account` (EIP-712 wallet signing) |
 | Config | `python-dotenv` + dataclass immutabili |
@@ -290,7 +290,7 @@ pandas>=2.1.0             # Time series
 ta>=0.11.0                # Indicatori tecnici (RSI, BB, MACD, EMA)
 aiosqlite>=0.19.0         # SQLite asincrono
 python-dotenv>=1.0.0      # Config da .env
-aiohttp>=3.9.0            # Dashboard web + Telegram
+aiohttp>=3.9.0            # Telegram notifications
 ```
 
 ### Configurazione .env
@@ -330,8 +330,6 @@ Vedi la sezione [Configurazione](#configurazione) per tutte le variabili disponi
 | `--paper` | Paper trading: logga le decisioni ma non piazza ordini |
 | `--no-ai` | Disabilita l'AI review, usa pure regole codificate |
 | `--once` | Esegue un solo ciclo e poi esce |
-| `--no-dashboard` | Disabilita la web dashboard |
-| `--dashboard-port N` | Porta dashboard (default: 8080) |
 
 ### Esempi
 
@@ -348,8 +346,8 @@ Vedi la sezione [Configurazione](#configurazione) per tutte le variabili disponi
 # Senza AI review (pure rule-based)
 .venv/bin/python main.py --no-ai
 
-# Test veloce (paper + no AI + singolo ciclo + no dashboard)
-.venv/bin/python main.py --paper --no-ai --once --no-dashboard
+# Test veloce (paper + no AI + singolo ciclo)
+.venv/bin/python main.py --paper --no-ai --once
 
 # MAINNET TRADING (usare con cautela!)
 .venv/bin/python main.py --live
@@ -368,18 +366,17 @@ Il bot gestisce `SIGINT` (Ctrl+C) e `SIGTERM`:
 
 ## Dashboard
 
-Dashboard web con aggiornamento real-time via WebSocket.
+Dashboard web standalone basata su **Next.js**, nella cartella `web/`. Legge il database SQLite in modalita' readonly e `bot_status.json` per visualizzare lo stato del bot. La dashboard e' separata dal processo del bot.
 
 ```bash
-# Default porta 8080 (avviata automaticamente con il bot)
-# O standalone:
-.venv/bin/python -m dashboard.server
+# Development (con hot reload)
+cd web && npm run dev
 
-# Porta personalizzata
-.venv/bin/python -m dashboard.server --port 9090
+# Production
+cd web && npm run build && npm start
 ```
 
-Apri `http://localhost:8080` nel browser.
+Apri `http://localhost:3000` nel browser.
 
 | Sezione | Contenuto |
 |---|---|
@@ -473,11 +470,10 @@ binance/
 │   ├── __init__.py
 │   └── ai_advisor.md                # System prompt per AI advisor
 │
-├── dashboard/
-│   ├── __init__.py
-│   ├── server.py                    # Server aiohttp: HTTP + WebSocket, broadcast ogni 2s
-│   └── templates/
-│       └── index.html               # Frontend single-page, dark theme
+├── web/                                 # Dashboard Next.js (standalone)
+│   ├── package.json
+│   ├── next.config.ts
+│   └── src/                             # Sorgenti Next.js (App Router)
 │
 ├── utils/
 │   ├── __init__.py

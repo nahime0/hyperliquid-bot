@@ -19,8 +19,6 @@ Usage:
     .venv/bin/python main.py --paper              # paper trading (log only, no orders)
     .venv/bin/python main.py --no-ai              # no AI review (pure rule-based)
     .venv/bin/python main.py --once               # run one cycle then exit
-    .venv/bin/python main.py --no-dashboard       # disable web dashboard
-    .venv/bin/python main.py --dashboard-port 9090
 """
 from __future__ import annotations
 
@@ -48,17 +46,10 @@ from strategies.mean_reversion import MeanReversionStrategy
 from strategies.multi_strategy import MultiStrategy
 from strategies.rsi_divergence import RSIDivergenceStrategy
 from strategies.trend_filter import TrendFilter
-from aiohttp import web
-
-from dashboard.server import create_app as create_dashboard
 from utils.logger import setup_logging, get_logger
 from utils.telegram import TelegramNotifier
 
 logger = get_logger(__name__)
-
-# Dashboard
-DASHBOARD_HOST = "0.0.0.0"
-DASHBOARD_PORT = 8080
 
 # Balance snapshot interval (seconds)
 BALANCE_SNAPSHOT_INTERVAL = 300  # 5 minutes
@@ -77,8 +68,6 @@ class Bot:
         paper: bool = False,
         no_ai: bool = False,
         once: bool = False,
-        dashboard_port: int = DASHBOARD_PORT,
-        no_dashboard: bool = False,
         strategy_mode: str = "multi",
     ) -> None:
         self._settings = settings
@@ -86,8 +75,6 @@ class Bot:
         self._no_ai = no_ai
         self._once = once
         self._running = False
-        self._dashboard_port = dashboard_port
-        self._no_dashboard = no_dashboard
         self._strategy_mode = strategy_mode
 
         # Components (initialised in start())
@@ -142,9 +129,6 @@ class Bot:
             )
 
         self._telegram = TelegramNotifier(settings.telegram)
-
-        # Dashboard (non-blocking aiohttp server)
-        self._dashboard_runner: web.AppRunner | None = None
 
         # Shutdown event
         self._shutdown_event = asyncio.Event()
@@ -229,10 +213,6 @@ class Bot:
         if not self._no_ai:
             logger.info("AI advisor enabled (model=%s, timeout=%ds)", self._settings.ai.model, self._settings.ai.timeout)
 
-        # Dashboard
-        if not self._no_dashboard:
-            await self._start_dashboard()
-
         self._running = True
 
         await self._telegram.notify_alert(
@@ -267,36 +247,11 @@ class Bot:
         except Exception:
             logger.exception("Error stopping market data")
 
-        # Dashboard
-        await self._stop_dashboard()
-
         await self._telegram.close()
         await self._client.close()
         await self._db.close()
 
         logger.info("Shutdown complete")
-
-    # ── Dashboard ─────────────────────────────────────────────
-
-    async def _start_dashboard(self) -> None:
-        try:
-            app = create_dashboard()
-            self._dashboard_runner = web.AppRunner(app)
-            await self._dashboard_runner.setup()
-            site = web.TCPSite(self._dashboard_runner, DASHBOARD_HOST, self._dashboard_port)
-            await site.start()
-            logger.info("Dashboard running at http://%s:%d", DASHBOARD_HOST, self._dashboard_port)
-        except Exception:
-            logger.exception("Failed to start dashboard — continuing without it")
-            self._dashboard_runner = None
-
-    async def _stop_dashboard(self) -> None:
-        if self._dashboard_runner:
-            try:
-                await self._dashboard_runner.cleanup()
-            except Exception:
-                logger.debug("Error stopping dashboard", exc_info=True)
-            self._dashboard_runner = None
 
     # ── Main loop ────────────────────────────────────────────
 
@@ -1327,8 +1282,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--paper", action="store_true", help="Paper trading (log decisions, no real orders)")
     parser.add_argument("--no-ai", action="store_true", help="Disable AI review, use pure rule-based trading")
     parser.add_argument("--once", action="store_true", help="Run one cycle then exit")
-    parser.add_argument("--no-dashboard", action="store_true", help="Disable the web dashboard")
-    parser.add_argument("--dashboard-port", type=int, default=DASHBOARD_PORT, help=f"Dashboard port (default: {DASHBOARD_PORT})")
     parser.add_argument(
         "--strategy",
         choices=["multi", "mean_reversion", "rsi_div"],
@@ -1354,8 +1307,6 @@ async def async_main() -> None:
         paper=args.paper,
         no_ai=args.no_ai,
         once=args.once,
-        dashboard_port=args.dashboard_port,
-        no_dashboard=args.no_dashboard,
         strategy_mode=args.strategy,
     )
 

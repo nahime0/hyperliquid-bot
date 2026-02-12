@@ -35,7 +35,7 @@ binance/
 │   └── backtest.py            # BacktestEngine
 ├── schemas/                   # JSON Schema for AI advisor output
 ├── prompts/                   # System prompt for AI advisor
-├── dashboard/                 # Web dashboard (aiohttp + WebSocket)
+├── web/                       # Next.js dashboard (TypeScript + Tailwind)
 ├── tests/                     # pytest unit + integration tests
 ├── utils/                     # Logger, Telegram
 └── scripts/                   # Test, backtest, download history

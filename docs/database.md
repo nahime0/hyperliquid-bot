@@ -4,7 +4,7 @@
 
 Il bot usa **SQLite** (via `aiosqlite`) per persistenza asincrona. Il database si trova di default in `data/trading_bot.db`.
 
-WAL mode e' abilitato per permettere letture concorrenti (dashboard + bot).
+WAL mode e' abilitato per permettere letture concorrenti (Next.js dashboard via `better-sqlite3` + bot).
 
 ## Schema
 
@@ -148,4 +148,4 @@ FROM ai_decisions GROUP BY tier
 
 ## Dashboard queries
 
-La dashboard (`dashboard/server.py`) legge il DB in read-only (WAL mode) ogni 2 secondi e invia i dati via WebSocket.
+La dashboard Next.js (`web/`) legge il DB in read-only (WAL mode) tramite `better-sqlite3`. I dati vengono aggiornati automaticamente via SWR polling lato client.

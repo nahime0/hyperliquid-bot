@@ -59,7 +59,7 @@ Cache in memoria dei dati di mercato con aggiornamento via WebSocket.
 Orchestratore principale. Possiede tutti i componenti e gestisce il loop.
 
 **Ciclo di vita:**
-1. `start()` — Connette client, DB, scopre coin, avvia WS, strategie, dashboard
+1. `start()` — Connette client, DB, scopre coin, avvia WS, strategie
 2. `run()` — Loop principale con `_tick()` ogni `decision_interval` secondi
 3. `stop()` — Shutdown graceful: salva stato, chiude connessioni
 
@@ -80,7 +80,7 @@ Orchestratore principale. Possiede tutti i componenti e gestisce il loop.
 9. Validate + execute per ogni decisione
 10. Balance snapshot periodico (ogni 5 min)
 11. Check consecutive losses
-12. Write status per dashboard
+12. Write status to `data/bot_status.json` (read by Next.js dashboard)
 
 ### 4. Flusso dati
 
