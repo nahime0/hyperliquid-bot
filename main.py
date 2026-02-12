@@ -896,6 +896,13 @@ class Bot:
         price = await self._client.get_price(symbol)
         leverage = self._settings.hyperliquid.default_leverage
 
+        # Ensure leverage is set on Hyperliquid BEFORE placing the order
+        try:
+            is_cross = self._settings.hyperliquid.margin_mode == "cross"
+            await self._client.update_leverage(symbol, leverage, is_cross)
+        except Exception:
+            logger.warning("Failed to set leverage for %s — proceeding with exchange default", symbol)
+
         # notional = margin * leverage, qty = notional / price
         notional = (size.size_usdc * leverage) if size and size.size_usdc > 0 else 0
         raw_qty = notional / price if price > 0 else 0
