@@ -35,60 +35,72 @@ async def discover_perp_coins(
     min_volume_24h: float = 50_000.0,
     max_coins: int = 60,
 ) -> list[str]:
-    """Discover perpetual coins from Hyperliquid meta().
+    """Discover perpetual coins from Hyperliquid, filtered by 24h volume.
 
-    Calls info.meta() to get universe of assets, then filters
-    by those with active mid prices.
+    Uses meta_and_asset_ctxs() to get real 24h notional volume (dayNtlVlm)
+    for each asset. Coins below min_volume_24h are excluded.
 
     Args:
         client: HyperliquidClient instance (already connected).
-        min_volume_24h: Minimum 24h volume in USDC (not used directly,
-            but we filter by active mid prices as a proxy).
+        min_volume_24h: Minimum 24h notional volume in USDC.
         max_coins: Maximum number of coins to return.
 
     Returns:
-        Sorted list of coin names (e.g. ["BTC", "ETH", "SOL", ...]).
+        List of coin names sorted by 24h volume (descending).
     """
     try:
-        meta = client.get_meta()
+        meta, asset_ctxs = await client.get_meta_and_asset_ctxs()
         universe = meta.get("universe", [])
         if not universe:
             logger.warning("No assets in meta() universe — using fallback")
             return ALL_COINS
 
-        # Get all mid prices to filter active assets
-        all_mids = await client.get_all_mids()
-
-        # Filter: only coins with an active mid price
-        active_coins: list[str] = []
-        for asset in universe:
-            coin = asset["name"]
-            if coin in all_mids and float(all_mids[coin]) > 0:
-                active_coins.append(coin)
-
-        if not active_coins:
-            logger.warning("No active coins found — using fallback")
+        if len(universe) != len(asset_ctxs):
+            logger.warning(
+                "Universe/asset_ctxs length mismatch (%d vs %d) — using fallback",
+                len(universe), len(asset_ctxs),
+            )
             return ALL_COINS
 
-        logger.info("Meta universe: %d assets, %d with active mid prices", len(universe), len(active_coins))
+        # Zip universe with asset contexts and filter by 24h volume
+        coins_with_volume: list[tuple[str, float]] = []
+        for asset, ctx in zip(universe, asset_ctxs):
+            coin = asset["name"]
+            try:
+                day_volume = float(ctx.get("dayNtlVlm", 0))
+            except (ValueError, TypeError):
+                day_volume = 0.0
+            if day_volume >= min_volume_24h:
+                coins_with_volume.append((coin, day_volume))
 
-        # Take top N (universe is already ordered by Hyperliquid internally)
-        result = active_coins[:max_coins]
+        total_active = len(coins_with_volume)
 
-        # Ensure CORE_COINS are always included
+        if not coins_with_volume:
+            logger.warning(
+                "No coins passed volume filter (min $%.0f) — using fallback",
+                min_volume_24h,
+            )
+            return ALL_COINS
+
+        # Sort by volume descending (most liquid first)
+        coins_with_volume.sort(key=lambda x: x[1], reverse=True)
+
+        # Take top N
+        result = [coin for coin, _ in coins_with_volume[:max_coins]]
+
+        # CORE_COINS included only if they passed the volume filter
+        volume_set = {coin for coin, _ in coins_with_volume}
         for core in CORE_COINS:
-            if core in all_mids and core not in result:
+            if core in volume_set and core not in result:
                 result.append(core)
 
-        result.sort()
-
         logger.info(
-            "Discovered %d perpetual coins (from %d active, max=%d)",
-            len(result), len(active_coins), max_coins,
+            "Filtered %d coins by volume (min $%.0f), kept %d (max=%d)",
+            len(universe), min_volume_24h, len(result), max_coins,
         )
 
         if len(result) < 5:
-            logger.warning("Very few coins discovered (%d) — check filters", len(result))
+            logger.warning("Very few coins passed volume filter (%d) — check min_volume_24h", len(result))
 
         return result
 

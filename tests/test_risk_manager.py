@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import pytest_asyncio
 
-from config.settings import RiskConfig
+from config.settings import MarketConfig, RiskConfig
 from core.types import Decision
 from data.db import Database
 from risk.position_tracker import PositionTracker
@@ -19,9 +19,10 @@ from risk.risk_manager import RiskManager
 class MockClient:
     """Lightweight mock for HyperliquidClient."""
 
-    def __init__(self, balance: float = 1000.0, positions: list | None = None):
+    def __init__(self, balance: float = 1000.0, positions: list | None = None, l2_snapshot: dict | None = None):
         self._balance = balance
         self._positions = positions or []
+        self._l2_snapshot = l2_snapshot
 
     async def get_account_balance(self) -> float:
         return self._balance
@@ -34,6 +35,15 @@ class MockClient:
 
     async def update_leverage(self, coin, lev, is_cross=True):
         pass
+
+    async def get_l2_snapshot(self, coin: str) -> dict:
+        if self._l2_snapshot is not None:
+            return self._l2_snapshot
+        # Default: tight spread (0.05%)
+        return {"levels": [
+            [{"px": "1999.5", "sz": "10", "n": 5}],
+            [{"px": "2000.5", "sz": "10", "n": 5}],
+        ]}
 
 
 # ── Fixtures ────────────────────────────────────────────────
@@ -111,7 +121,8 @@ class TestValidation:
     @pytest.mark.asyncio
     async def test_validate_max_positions_blocks(self, risk_env):
         rm, pt, _ = risk_env
-        rm._open_position_count = 5  # max_open_positions=5
+        # With 1000 USDC / 25 per slot = 40, capped at max_open_positions=15
+        rm._open_position_count = 15
         d = Decision(action="BUY", confidence=0.8, reasoning="sig", symbol="ETH")
         result = await rm.validate_decision(d)
         assert result.approved is False
@@ -347,8 +358,106 @@ class TestRiskMetrics:
             "daily_drawdown_pct", "open_positions", "max_open_positions",
             "kill_switch", "kill_reason", "daily_paused", "daily_pause_reason",
             "max_trade_pct", "stop_loss_pct", "take_profit_pct", "min_balance_usdc",
+            "capital_utilization", "total_margin_used", "available_margin",
+            "target_utilization",
         }
         assert set(metrics.keys()) == expected_keys
         assert metrics["current_balance"] == 950.0
         assert metrics["open_positions"] == 2
         assert metrics["drawdown_pct"] == pytest.approx(5.0, rel=1e-2)
+
+
+# ── Spread check ────────────────────────────────────────────
+
+
+class TestSpreadCheck:
+    @pytest.mark.asyncio
+    async def test_spread_blocks_wide_spread(self, db, risk_config):
+        """Wide spread (2%) should block entry."""
+        wide_l2 = {"levels": [
+            [{"px": "1980", "sz": "10", "n": 5}],
+            [{"px": "2020", "sz": "10", "n": 5}],
+        ]}
+        client = MockClient(balance=1000.0, l2_snapshot=wide_l2)
+        mc = MarketConfig(max_spread_pct=0.5)
+        pt = PositionTracker(db, risk_config)
+        rm = RiskManager(risk_config, client, db, position_tracker=pt, market_config=mc)
+        rm._current_balance = 1000.0
+        rm._peak_balance = 1000.0
+
+        d = Decision(action="BUY", confidence=0.8, reasoning="sig", symbol="ETH")
+        result = await rm.validate_decision(d)
+        assert result.approved is False
+        assert "Spread" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_spread_allows_tight_spread(self, db, risk_config):
+        """Tight spread (0.05%) should allow entry."""
+        tight_l2 = {"levels": [
+            [{"px": "1999.5", "sz": "10", "n": 5}],
+            [{"px": "2000.5", "sz": "10", "n": 5}],
+        ]}
+        client = MockClient(balance=1000.0, l2_snapshot=tight_l2)
+        mc = MarketConfig(max_spread_pct=0.5)
+        pt = PositionTracker(db, risk_config)
+        rm = RiskManager(risk_config, client, db, position_tracker=pt, market_config=mc)
+        rm._current_balance = 1000.0
+        rm._peak_balance = 1000.0
+
+        d = Decision(action="BUY", confidence=0.8, reasoning="sig", symbol="ETH",
+                      stop_loss=1960, take_profit=2060)
+        result = await rm.validate_decision(d)
+        assert result.approved is True
+
+    @pytest.mark.asyncio
+    async def test_spread_check_disabled_when_no_market_config(self, db, risk_config):
+        """Without market_config, spread check is skipped."""
+        client = MockClient(balance=1000.0)
+        pt = PositionTracker(db, risk_config)
+        rm = RiskManager(risk_config, client, db, position_tracker=pt)
+        rm._current_balance = 1000.0
+        rm._peak_balance = 1000.0
+
+        d = Decision(action="BUY", confidence=0.8, reasoning="sig", symbol="ETH",
+                      stop_loss=1960, take_profit=2060)
+        result = await rm.validate_decision(d)
+        assert result.approved is True
+
+    @pytest.mark.asyncio
+    async def test_spread_check_graceful_on_l2_failure(self, db, risk_config):
+        """If L2 snapshot fails, entry is still allowed (graceful degradation)."""
+        client = MockClient(balance=1000.0)
+        # Override to raise
+        async def _raise_l2(coin):
+            raise RuntimeError("L2 unavailable")
+        client.get_l2_snapshot = _raise_l2
+
+        mc = MarketConfig(max_spread_pct=0.5)
+        pt = PositionTracker(db, risk_config)
+        rm = RiskManager(risk_config, client, db, position_tracker=pt, market_config=mc)
+        rm._current_balance = 1000.0
+        rm._peak_balance = 1000.0
+
+        d = Decision(action="BUY", confidence=0.8, reasoning="sig", symbol="ETH",
+                      stop_loss=1960, take_profit=2060)
+        result = await rm.validate_decision(d)
+        assert result.approved is True
+
+    @pytest.mark.asyncio
+    async def test_spread_blocks_short_entry(self, db, risk_config):
+        """Wide spread also blocks SHORT entries."""
+        wide_l2 = {"levels": [
+            [{"px": "1980", "sz": "10", "n": 5}],
+            [{"px": "2020", "sz": "10", "n": 5}],
+        ]}
+        client = MockClient(balance=1000.0, l2_snapshot=wide_l2)
+        mc = MarketConfig(max_spread_pct=0.5)
+        pt = PositionTracker(db, risk_config)
+        rm = RiskManager(risk_config, client, db, position_tracker=pt, market_config=mc)
+        rm._current_balance = 1000.0
+        rm._peak_balance = 1000.0
+
+        d = Decision(action="SHORT", confidence=0.8, reasoning="sig", symbol="BTC")
+        result = await rm.validate_decision(d)
+        assert result.approved is False
+        assert "Spread" in result.reason

@@ -96,7 +96,7 @@ class Bot:
         self._market_data = MarketData(self._client, settings)
         self._advisor = AIAdvisor(model=settings.ai.model, timeout=settings.ai.timeout)
         self._positions = PositionTracker(self._db, settings.risk)
-        self._risk = RiskManager(settings.risk, self._client, self._db, self._positions)
+        self._risk = RiskManager(settings.risk, self._client, self._db, self._positions, market_config=settings.market)
 
         # Autonomous components
         self._trend_filter = TrendFilter(self._market_data)
@@ -109,6 +109,7 @@ class Bot:
             self._positions,
             settings.risk,
             interval=settings.strategy.mr_interval,
+            min_candle_volume_usdc=settings.strategy.min_candle_volume_usdc,
         )
         self._rsi_div = RSIDivergenceStrategy(
             self._market_data,
@@ -449,12 +450,17 @@ class Bot:
                 positions_for_ai = [p for p in open_positions if p["symbol"] not in held_syms]
 
         if not self._no_ai and (positions_for_ai or opportunities):
+            utilization = metrics.get("capital_utilization", 0)
             account = {
                 "balance_usdc": metrics.get("current_balance", 0),
                 "daily_pnl_pct": -metrics.get("daily_drawdown_pct", 0),
                 "total_pnl": metrics.get("current_balance", 0) - metrics.get("peak_balance", 0),
                 "open_position_count": metrics.get("open_positions", 0),
-                "max_positions": metrics.get("max_open_positions", 5),
+                "max_positions": metrics.get("max_open_positions", 15),
+                "capital_utilization_pct": round(utilization * 100, 1),
+                "total_margin_used": metrics.get("total_margin_used", 0),
+                "available_margin": metrics.get("available_margin", 0),
+                "target_utilization_pct": round(metrics.get("target_utilization", 0.5) * 100, 1),
             }
             recent_trades = await self._db.get_recent_trades(20)
             trade_stats = await self._db.get_trade_stats()
@@ -478,6 +484,16 @@ class Bot:
                         confidence=1.0,
                         reasoning=f"AI: {pa.get('reasoning', '')}",
                         strategy_type="ai_advisor",
+                    ))
+                elif pa["action"] == "SCALE_UP":
+                    adj = pa.get("adjustments", {})
+                    candidates.append(Decision(
+                        action="SCALE_UP",
+                        symbol=pa["symbol"],
+                        confidence=0.8,
+                        reasoning=f"AI: {pa.get('reasoning', '')}",
+                        strategy_type="ai_advisor",
+                        size_pct=adj.get("size_pct"),
                     ))
                 elif pa["action"] == "HOLD":
                     defer_cond = pa.get("defer")
@@ -528,8 +544,8 @@ class Bot:
             # Keep AI-approved entries + all CLOSE/SELL decisions
             candidates = approved + [d for d in candidates if d.action in ("CLOSE", "SELL")]
 
-        # 7. Sort: CLOSE first, then entries
-        _ACTION_ORDER = {"SELL": 0, "CLOSE": 0, "BUY": 1, "SHORT": 1, "HOLD": 2}
+        # 7. Sort: CLOSE first, then SCALE_UP, then entries
+        _ACTION_ORDER = {"SELL": 0, "CLOSE": 0, "SCALE_UP": 1, "BUY": 2, "SHORT": 2, "HOLD": 3}
         candidates.sort(key=lambda d: _ACTION_ORDER.get(d.action, 3))
 
         # Anti-churning
@@ -837,6 +853,8 @@ class Bot:
                 return await self._execute_entry(decision, size, is_buy=True)
             elif decision.action == "SHORT":
                 return await self._execute_entry(decision, size, is_buy=False)
+            elif decision.action == "SCALE_UP":
+                return await self._execute_scale_up(decision, size)
             elif decision.action in ("SELL", "CLOSE"):
                 return await self._execute_close(decision)
         except Exception:
@@ -892,6 +910,24 @@ class Bot:
                 symbol=symbol, side="SHORT", price=price, quantity=qty,
                 strategy=decision.strategy_type or "mean_reversion", notes="[PAPER]",
             )
+            return None
+
+        elif decision.action == "SCALE_UP":
+            pos = await self._positions.get_position_for_symbol(symbol)
+            if pos:
+                direction = pos.get("direction", "LONG")
+                leverage = pos.get("leverage", self._settings.hyperliquid.default_leverage)
+                notional = (size.size_usdc * leverage) if size and size.size_usdc > 0 else 0
+                qty = notional / price if price > 0 else 0
+                qty = self._client.round_size(symbol, qty)
+                if qty > 0:
+                    await self._positions.scale_position(pos["id"], qty, price)
+                    await self._db.insert_trade(
+                        symbol=symbol, side="BUY" if direction == "LONG" else "SHORT",
+                        price=price, quantity=qty,
+                        strategy="ai_advisor", notes="[PAPER] SCALE_UP",
+                    )
+                    logger.info("[PAPER] SCALE_UP %s %s +%.6f @ %.4f", direction, symbol, qty, price)
             return None
 
         elif decision.action in ("SELL", "CLOSE"):
@@ -966,6 +1002,60 @@ class Bot:
             "%s executed: %s qty=%.6f price=%.4f SL=%.4f TP=%.4f lev=%dx",
             action_name, symbol, qty, price,
             decision.stop_loss or 0, decision.take_profit or 0, leverage,
+        )
+        return None
+
+    async def _execute_scale_up(self, decision: Decision, size: Any) -> float | None:
+        """Execute a SCALE_UP: add to an existing position in the same direction."""
+        symbol = decision.symbol
+        pos = await self._positions.get_position_for_symbol(symbol)
+
+        if not pos:
+            logger.warning("SCALE_UP %s: no position in tracker — skipping", symbol)
+            return None
+
+        direction = pos.get("direction", "LONG")
+        is_buy = direction == "LONG"
+        leverage = pos.get("leverage", self._settings.hyperliquid.default_leverage)
+        price = await self._client.get_price(symbol)
+
+        # Ensure leverage matches
+        try:
+            is_cross = self._settings.hyperliquid.margin_mode == "cross"
+            await self._client.update_leverage(symbol, leverage, is_cross)
+        except Exception:
+            logger.warning("Failed to set leverage for SCALE_UP %s", symbol)
+
+        notional = (size.size_usdc * leverage) if size and size.size_usdc > 0 else 0
+        raw_qty = notional / price if price > 0 else 0
+        qty = self._client.round_size(symbol, raw_qty)
+        if qty <= 0:
+            logger.warning("SCALE_UP %s: computed qty is 0 after rounding", symbol)
+            return None
+
+        result = await self._client.place_market_order(
+            coin=symbol, is_buy=is_buy, size=qty,
+        )
+
+        try:
+            await self._positions.scale_position(pos["id"], qty, price)
+        except Exception:
+            logger.critical(
+                "SCALE_UP tracker failed after order placed! %s %s qty=%.6f is LIVE on HL but untracked",
+                direction, symbol, qty,
+            )
+            raise
+
+        await self._db.insert_trade(
+            symbol=symbol, side="BUY" if is_buy else "SHORT", price=price,
+            quantity=qty, strategy="ai_advisor", notes="SCALE_UP",
+        )
+        await self._telegram.notify_trade(
+            action="SCALE_UP", symbol=symbol, qty=qty, price=price,
+        )
+        logger.info(
+            "SCALE_UP executed: %s %s +%.6f @ %.4f lev=%dx",
+            direction, symbol, qty, price, leverage,
         )
         return None
 

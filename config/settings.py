@@ -45,15 +45,18 @@ class AIConfig:
 
 @dataclass(frozen=True)
 class RiskConfig:
-    max_trade_pct: float = 10.0
+    max_trade_pct: float = 15.0
     stop_loss_pct: float = 1.0
     take_profit_pct: float = 1.5
     auto_take_profit: bool = False  # False → no auto-TP, rely on trailing stop
     max_daily_drawdown_pct: float = 5.0
     max_total_drawdown_pct: float = 15.0
-    max_open_positions: int = 5         # hard cap (or static value if dynamic disabled)
+    max_open_positions: int = 15        # hard cap (or static value if dynamic disabled)
     dynamic_positions: bool = True      # scale max positions with balance
     usdc_per_position: float = 25.0    # 1 position slot per N USDC (100 USDC → 4 slots)
+    # Capital utilization
+    target_utilization: float = 0.50    # target 50% balance as margin
+    max_size_boost: float = 2.5         # max multiplier on base sizing
     min_balance_usdc: float = 50.0
     min_holding_minutes: int = 15  # minimum time before AI can close a position
     max_leverage: int = 3
@@ -77,6 +80,7 @@ class RiskConfig:
 class MarketConfig:
     min_pair_volume: float = 50_000.0   # minimum 24h volume in USDC
     max_coins: int = 60                 # max perpetual coins to monitor
+    max_spread_pct: float = 0.5         # max bid-ask spread % (blocks entry if exceeded)
     intervals: tuple[str, ...] = ("5m", "15m", "1h")  # candle intervals to subscribe
 
 
@@ -87,6 +91,7 @@ class StrategyConfig:
     rsi_div_swing_window: int = 4       # optimized: sw=4 dominated 100% of top 30
     rsi_div_long_exit: float = 55.0     # optimized: le=55 in 50% of top 30
     rsi_div_short_exit: float = 35.0    # optimized: se=35 in 73% of top 30
+    min_candle_volume_usdc: float = 10_000.0  # skip coins with candle volume below this
     primary_interval: str = "5m"      # RSI Div uses 5m
     mr_interval: str = "15m"          # Mean Reversion uses 15m
     trend_interval: str = "1h"        # Trend filter on 1h
@@ -135,13 +140,13 @@ def load_settings() -> Settings:
             timeout=int(os.getenv("AI_TIMEOUT", "120")),
         ),
         risk=RiskConfig(
-            max_trade_pct=float(os.getenv("MAX_TRADE_PCT", "10")),
+            max_trade_pct=float(os.getenv("MAX_TRADE_PCT", "15")),
             stop_loss_pct=float(os.getenv("STOP_LOSS_PCT", "1.0")),
             take_profit_pct=float(os.getenv("TAKE_PROFIT_PCT", "1.5")),
             auto_take_profit=_bool(os.getenv("AUTO_TAKE_PROFIT"), default=False),
             max_daily_drawdown_pct=float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", "5.0")),
             max_total_drawdown_pct=float(os.getenv("MAX_TOTAL_DRAWDOWN_PCT", "15.0")),
-            max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "5")),
+            max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "15")),
             dynamic_positions=_bool(os.getenv("DYNAMIC_POSITIONS"), default=True),
             usdc_per_position=float(os.getenv("USDC_PER_POSITION", "25.0")),
             min_balance_usdc=float(os.getenv("MIN_BALANCE_USDC", "50.0")),
@@ -153,6 +158,8 @@ def load_settings() -> Settings:
             trailing_tight_distance_pct=float(os.getenv("TRAILING_TIGHT_DISTANCE_PCT", "0.75")),
             time_stop_hours=float(os.getenv("TIME_STOP_HOURS", "4.0")),
             time_stop_min_pnl_pct=float(os.getenv("TIME_STOP_MIN_PNL_PCT", "0.5")),
+            target_utilization=float(os.getenv("TARGET_UTILIZATION", "0.50")),
+            max_size_boost=float(os.getenv("MAX_SIZE_BOOST", "2.5")),
             symbol_cooldown_sec=int(os.getenv("SYMBOL_COOLDOWN_SEC", "1800")),
             global_cooldown_sec=int(os.getenv("GLOBAL_COOLDOWN_SEC", "900")),
             global_cooldown_losses=int(os.getenv("GLOBAL_COOLDOWN_LOSSES", "3")),
@@ -160,6 +167,7 @@ def load_settings() -> Settings:
         market=MarketConfig(
             min_pair_volume=float(os.getenv("MIN_PAIR_VOLUME", "50000")),
             max_coins=int(os.getenv("MAX_COINS", "60")),
+            max_spread_pct=float(os.getenv("MAX_SPREAD_PCT", "0.5")),
         ),
         strategy=StrategyConfig(
             active_strategies=tuple(
@@ -169,6 +177,7 @@ def load_settings() -> Settings:
             rsi_div_swing_window=int(os.getenv("RSI_DIV_SWING_WINDOW", "4")),
             rsi_div_long_exit=float(os.getenv("RSI_DIV_LONG_EXIT", "55.0")),
             rsi_div_short_exit=float(os.getenv("RSI_DIV_SHORT_EXIT", "35.0")),
+            min_candle_volume_usdc=float(os.getenv("MIN_CANDLE_VOLUME_USDC", "10000")),
             primary_interval=os.getenv("PRIMARY_INTERVAL", "5m"),
             mr_interval=os.getenv("MR_INTERVAL", "15m"),
             trend_interval=os.getenv("TREND_INTERVAL", "1h"),

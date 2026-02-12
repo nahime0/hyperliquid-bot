@@ -36,14 +36,16 @@ Tutte le configurazioni sono gestite tramite variabili d'ambiente caricate da `.
 
 | Variabile | Default | Tipo | Descrizione |
 |---|---|---|---|
-| `MAX_TRADE_PCT` | `10` | float | Max % del bankroll per singolo trade. |
+| `MAX_TRADE_PCT` | `15` | float | Max % del bankroll per singolo trade. |
 | `STOP_LOSS_PCT` | `1.0` | float | Stop loss automatico (%). Applicato se non specificato. |
 | `TAKE_PROFIT_PCT` | `1.5` | float | Take profit automatico (%). |
 | `MAX_DAILY_DRAWDOWN_PCT` | `5.0` | float | Drawdown giornaliero max. Supera → pausa fino a mezzanotte UTC. |
 | `MAX_TOTAL_DRAWDOWN_PCT` | `15.0` | float | Drawdown totale max dal peak. Supera → kill switch. |
-| `MAX_OPEN_POSITIONS` | `5` | int | Max posizioni aperte (hard cap per dynamic, valore fisso se static). |
+| `MAX_OPEN_POSITIONS` | `15` | int | Max posizioni aperte (hard cap per dynamic, valore fisso se static). |
 | `DYNAMIC_POSITIONS` | `true` | bool | Scala max posizioni con balance (1 slot ogni USDC_PER_POSITION). |
 | `USDC_PER_POSITION` | `25.0` | float | USDC necessari per ogni slot di posizione. |
+| `TARGET_UTILIZATION` | `0.50` | float | Target utilizzo capitale (50% del balance come margine). |
+| `MAX_SIZE_BOOST` | `2.5` | float | Max moltiplicatore sul sizing base quando utilizzo e' basso. |
 | `AUTO_TAKE_PROFIT` | `false` | bool | Se true, genera TP automatico. Se false, il trailing stop gestisce i profitti. |
 | `MIN_BALANCE_USDC` | `50.0` | float | Balance minimo. Sotto → kill switch. |
 | `MIN_HOLDING_MINUTES` | `15` | int | Tempo minimo di holding prima che l'AI possa chiudere una posizione. |
@@ -73,12 +75,14 @@ Tutte le configurazioni sono gestite tramite variabili d'ambiente caricate da `.
 | `GLOBAL_COOLDOWN_SEC` | `900` | int | Cooldown globale dopo N perdite (15 min). |
 | `GLOBAL_COOLDOWN_LOSSES` | `3` | int | Numero perdite che triggera il cooldown globale. |
 
-### Market Discovery
+### Market Discovery & Liquidity
 
 | Variabile | Default | Tipo | Descrizione |
 |---|---|---|---|
-| `MIN_PAIR_VOLUME` | `50000` | float | Volume 24h minimo in USDC per includere un coin. |
+| `MIN_PAIR_VOLUME` | `50000` | float | Volume 24h minimo in USDC per includere un coin nella discovery. Filtro su `dayNtlVlm` da Hyperliquid. |
 | `MAX_COINS` | `60` | int | Max coin perpetual da monitorare. |
+| `MAX_SPREAD_PCT` | `0.5` | float | Max bid-ask spread % per entry. Se spread > soglia, BUY/SHORT/SCALE_UP bloccati. 0 = disabilitato. |
+| `MIN_CANDLE_VOLUME_USDC` | `10000` | float | Volume minimo USDC per candela nelle strategie. Coins con volume candela inferiore vengono skippati. |
 
 ### Telegram (opzionale)
 
@@ -116,8 +120,12 @@ Settings
 │   ├── time stop parameters
 │   └── cooldown parameters
 ├── market: MarketConfig
-│   ├── min_pair_volume
-│   └── max_coins
+│   ├── min_pair_volume, max_coins
+│   └── max_spread_pct
+├── strategy: StrategyConfig
+│   ├── active_strategies, rsi_div params
+│   ├── min_candle_volume_usdc
+│   └── intervals (primary, mr, trend)
 ├── telegram: TelegramConfig
 │   ├── bot_token, chat_id
 │   └── enabled (property)

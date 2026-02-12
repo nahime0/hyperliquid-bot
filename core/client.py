@@ -156,6 +156,11 @@ class HyperliquidClient:
 
     # ── Market data ─────────────────────────────────────────
 
+    async def get_meta_and_asset_ctxs(self) -> tuple[dict, list]:
+        """Get meta + asset contexts (includes dayNtlVlm = 24h notional volume)."""
+        result = await self._retry(self.info.meta_and_asset_ctxs)
+        return result[0], result[1]
+
     async def get_all_mids(self) -> dict[str, float]:
         """Get mid prices for all assets."""
         raw = await self._retry(self.info.all_mids)

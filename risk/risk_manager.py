@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from config.settings import RiskConfig
+from config.settings import MarketConfig, RiskConfig
 from core.types import Decision
 from core.client import HyperliquidClient
 from data.db import Database
@@ -53,16 +53,19 @@ class RiskManager:
         client: HyperliquidClient,
         db: Database,
         position_tracker: Any = None,
+        market_config: MarketConfig | None = None,
     ) -> None:
         self._config = config
         self._client = client
         self._db = db
         self._sizer = PositionSizer(config)
         self._position_tracker = position_tracker
+        self._market_config = market_config
 
         # Runtime state
         self._peak_balance: float = 0.0
         self._current_balance: float = 0.0
+        self._total_margin_used: float = 0.0
         self._open_position_count: int = 0
         self._kill_switch: bool = False
         self._kill_reason: str = ""
@@ -125,9 +128,12 @@ class RiskManager:
             if balance > self._peak_balance:
                 self._peak_balance = balance
 
-            # Count open positions from Hyperliquid
+            # Count open positions and sum margin used from Hyperliquid
             hl_positions = await self._client.get_open_positions()
             self._open_position_count = len(hl_positions)
+            self._total_margin_used = sum(
+                float(p.get("marginUsed", 0) or 0) for p in hl_positions
+            )
 
             # Check liquidation proximity
             for pos in hl_positions:
@@ -160,7 +166,7 @@ class RiskManager:
     async def validate_decision(self, decision: Decision) -> ValidationResult:
         """Validate a decision. May reduce size or block entirely.
 
-        Accepts BUY, SHORT, SELL, CLOSE, HOLD actions.
+        Accepts BUY, SHORT, SELL, CLOSE, HOLD, SCALE_UP actions.
         """
         # HOLD is always allowed
         if decision.action == "HOLD":
@@ -176,13 +182,17 @@ class RiskManager:
         if self._kill_switch:
             return self._block(decision, f"KILL SWITCH: {self._kill_reason}")
 
-        # ── Daily pause (blocks new entries) ──
-        if self._daily_paused and decision.action in ("BUY", "SHORT"):
+        # ── Daily pause (blocks new entries and scale-ups) ──
+        if self._daily_paused and decision.action in ("BUY", "SHORT", "SCALE_UP"):
             return self._block(decision, f"DAILY PAUSE: {self._daily_pause_reason}")
 
         # ── Symbol required for entry/exit ──
         if not decision.symbol:
             return self._block(decision, "No symbol specified")
+
+        # ── SCALE_UP: separate validation path ──
+        if decision.action == "SCALE_UP":
+            return await self._validate_scale_up(decision)
 
         # ── Max open positions (dynamic or static) ──
         max_pos = self._effective_max_positions()
@@ -201,6 +211,12 @@ class RiskManager:
                     f"Already holding {decision.symbol} (position #{existing['id']})",
                 )
 
+        # ── Spread check (pre-entry) ──
+        if decision.action in ("BUY", "SHORT"):
+            spread_block = await self._check_spread(decision)
+            if spread_block:
+                return spread_block
+
         # ── Minimum balance ──
         if self._current_balance < self._config.min_balance_usdc:
             return self._block(
@@ -212,13 +228,15 @@ class RiskManager:
         if decision.confidence < 0.5:
             return self._block(decision, f"Confidence {decision.confidence:.2f} too low")
 
-        # ── Position sizing (Kelly) ──
+        # ── Position sizing (Kelly + utilization boost) ──
         trade_stats = await self._db.get_trade_stats()
+        utilization_boost = self._compute_utilization_boost()
         size = self._sizer.compute(
             bankroll=self._current_balance,
             trade_stats=trade_stats,
             ai_confidence=decision.confidence,
             ai_size_pct=decision.size_pct,
+            utilization_boost=utilization_boost,
         )
 
         if size.size_usdc <= 0:
@@ -253,8 +271,9 @@ class RiskManager:
             )
 
         logger.info(
-            "Decision APPROVED: %s %s size=%.2f%% (%.2f USDC) conf=%.2f",
-            decision.action, decision.symbol, size.size_pct, size.size_usdc, decision.confidence,
+            "Decision APPROVED: %s %s size=%.2f%% (%.2f USDC) conf=%.2f boost=%.2f",
+            decision.action, decision.symbol, size.size_pct, size.size_usdc,
+            decision.confidence, utilization_boost,
         )
         return ValidationResult(
             approved=True,
@@ -263,12 +282,84 @@ class RiskManager:
             reason="approved",
         )
 
+    async def _validate_scale_up(self, decision: Decision) -> ValidationResult:
+        """Validate a SCALE_UP decision: requires existing position in profit."""
+        if not self._position_tracker:
+            return self._block(decision, "No position tracker")
+
+        pos = await self._position_tracker.get_position_for_symbol(decision.symbol)
+        if not pos:
+            return self._block(decision, f"SCALE_UP: no open position for {decision.symbol}")
+
+        # Must be in profit
+        pnl_pct = pos.get("pnl_pct")
+        if pnl_pct is None:
+            # Compute from current price
+            mid = None
+            try:
+                mid = await self._client.get_price(decision.symbol)
+            except Exception:
+                pass
+            if mid and mid > 0:
+                entry = pos["entry_price"]
+                direction = pos.get("direction", "LONG")
+                if direction == "LONG":
+                    pnl_pct = (mid - entry) / entry * 100
+                else:
+                    pnl_pct = (entry - mid) / entry * 100
+            else:
+                return self._block(decision, "SCALE_UP: cannot determine current PnL")
+
+        if pnl_pct <= 0:
+            return self._block(decision, f"SCALE_UP: position is not in profit (PnL={pnl_pct:.2f}%)")
+
+        # Spread check
+        spread_block = await self._check_spread(decision)
+        if spread_block:
+            return spread_block
+
+        # Minimum balance
+        if self._current_balance < self._config.min_balance_usdc:
+            return self._block(
+                decision,
+                f"Balance {self._current_balance:.2f} below minimum {self._config.min_balance_usdc}",
+            )
+
+        # Sizing (with utilization boost)
+        trade_stats = await self._db.get_trade_stats()
+        utilization_boost = self._compute_utilization_boost()
+        size = self._sizer.compute(
+            bankroll=self._current_balance,
+            trade_stats=trade_stats,
+            ai_confidence=decision.confidence,
+            ai_size_pct=decision.size_pct,
+            utilization_boost=utilization_boost,
+        )
+
+        if size.size_usdc <= 0:
+            return self._block(decision, f"SCALE_UP sizer: {size.reason}")
+
+        decision.size_pct = size.size_pct
+
+        logger.info(
+            "Decision APPROVED: SCALE_UP %s size=%.2f%% (%.2f USDC) conf=%.2f PnL=%.2f%%",
+            decision.symbol, size.size_pct, size.size_usdc, decision.confidence, pnl_pct,
+        )
+        return ValidationResult(
+            approved=True,
+            decision=decision,
+            size=size,
+            reason="approved_scale_up",
+        )
+
     # ── Risk metrics (for AI snapshot) ───────────────────────
 
     def get_risk_metrics(self) -> dict[str, Any]:
         """Produce risk metrics for the AI market snapshot."""
         drawdown_pct = self._drawdown_pct()
         daily_dd = self._daily_drawdown_pct()
+        utilization = self._compute_utilization()
+        available_margin = max(0, self._current_balance - self._total_margin_used)
         return {
             "current_balance": round(self._current_balance, 2),
             "peak_balance": round(self._peak_balance, 2),
@@ -284,6 +375,10 @@ class RiskManager:
             "stop_loss_pct": self._config.stop_loss_pct,
             "take_profit_pct": self._config.take_profit_pct,
             "min_balance_usdc": self._config.min_balance_usdc,
+            "capital_utilization": round(utilization, 4),
+            "total_margin_used": round(self._total_margin_used, 2),
+            "available_margin": round(available_margin, 2),
+            "target_utilization": self._config.target_utilization,
         }
 
     # ── Kill switch & daily pause (internal) ─────────────────
@@ -356,6 +451,61 @@ class RiskManager:
         if self._daily.start_balance <= 0:
             return 0.0
         return ((self._daily.start_balance - self._current_balance) / self._daily.start_balance) * 100
+
+    # ── Capital utilization ─────────────────────────────────
+
+    def _compute_utilization(self) -> float:
+        """Current capital utilization: margin_used / balance."""
+        if self._current_balance <= 0:
+            return 0.0
+        return self._total_margin_used / self._current_balance
+
+    def _compute_utilization_boost(self) -> float:
+        """Compute sizing boost based on capital utilization vs target.
+
+        When utilization is below target, boost sizing to deploy more capital.
+        Boost = min(target / max(utilization, 0.05), max_size_boost).
+        When utilization >= target, boost = 1.0 (no amplification).
+        """
+        utilization = self._compute_utilization()
+        target = self._config.target_utilization
+        if utilization >= target:
+            return 1.0
+        # Floor utilization at 5% to avoid extreme boosts with 0 margin used
+        effective_util = max(utilization, 0.05)
+        boost = target / effective_util
+        return min(boost, self._config.max_size_boost)
+
+    # ── Spread check ─────────────────────────────────────────
+
+    async def _check_spread(self, decision: Decision) -> ValidationResult | None:
+        """Check bid-ask spread via L2 snapshot. Returns block result or None."""
+        if not self._market_config or self._market_config.max_spread_pct <= 0:
+            return None
+        max_spread = self._market_config.max_spread_pct
+        try:
+            l2 = await self._client.get_l2_snapshot(decision.symbol)
+            levels = l2.get("levels", [])
+            if len(levels) < 2 or not levels[0] or not levels[1]:
+                return None  # graceful: no L2 data
+            best_bid = float(levels[0][0]["px"])
+            best_ask = float(levels[1][0]["px"])
+            if best_bid <= 0 or best_ask <= 0:
+                return None
+            mid = (best_ask + best_bid) / 2
+            spread_pct = (best_ask - best_bid) / mid * 100
+            if spread_pct > max_spread:
+                return self._block(
+                    decision,
+                    f"Spread {spread_pct:.2f}% > max {max_spread}% for {decision.symbol}",
+                )
+            logger.debug(
+                "Spread OK for %s: %.3f%% (max %.1f%%)",
+                decision.symbol, spread_pct, max_spread,
+            )
+        except Exception:
+            logger.warning("L2 spread check failed for %s — allowing entry (graceful)", decision.symbol)
+        return None
 
     # ── Helpers ──────────────────────────────────────────────
 

@@ -76,6 +76,7 @@ class RSIDivergenceStrategy(Strategy):
         self._sc = strategy_config
         self._coins = coins or []
         self._interval = strategy_config.primary_interval  # 5m
+        self._min_candle_volume_usdc = strategy_config.min_candle_volume_usdc
         self._signals: dict[str, DivergenceSignal] = {}
         self._funding_rates: dict[str, float] = {}
         self._max_funding_rate: float = 0.0005
@@ -133,6 +134,16 @@ class RSIDivergenceStrategy(Strategy):
             close = df["close"]
             high = df["high"]
             low = df["low"]
+
+            # Volume floor: skip illiquid coins
+            if self._min_candle_volume_usdc > 0 and "volume" in df.columns:
+                volume_usdc = float(close.iloc[-1] * df["volume"].iloc[-1])
+                if volume_usdc < self._min_candle_volume_usdc:
+                    logger.debug(
+                        "Skipping %s: candle volume %.0f USDC < %.0f",
+                        symbol, volume_usdc, self._min_candle_volume_usdc,
+                    )
+                    return
 
             # Compute RSI
             rsi_series = ta_lib.momentum.RSIIndicator(
@@ -267,14 +278,18 @@ class RSIDivergenceStrategy(Strategy):
                 decisions.append(exit_decision)
 
         # ENTRY checks
+        no_div_count = 0
+        div_found = 0
         for symbol in self._coins:
             if symbol in open_symbols:
                 continue
 
             sig = self._signals.get(symbol)
             if not sig or sig.divergence == "NONE":
+                no_div_count += 1
                 continue
 
+            div_found += 1
             if sig.divergence == "BULLISH_DIV":
                 entry = self._check_long_entry(symbol, sig)
             elif sig.divergence == "BEARISH_DIV":
@@ -285,6 +300,11 @@ class RSIDivergenceStrategy(Strategy):
             if entry:
                 decisions.append(entry)
 
+        logger.info(
+            "[RD SCAN] coins=%d, no_divergence=%d, divergences_found=%d, signals_generated=%d",
+            len(self._coins), no_div_count, div_found,
+            sum(1 for d in decisions if d.action in ("BUY", "SHORT")),
+        )
         return decisions
 
     def _check_exit(self, symbol: str, sig: DivergenceSignal, direction: str) -> Decision | None:
@@ -312,19 +332,22 @@ class RSIDivergenceStrategy(Strategy):
 
     def _check_long_entry(self, symbol: str, sig: DivergenceSignal) -> Decision | None:
         """Check if a LONG entry via bullish divergence is warranted."""
-        # Trend gate: BULLISH or NEUTRAL
+        diag = f"div={sig.divergence}, trend={sig.trend}, RSI={f'{sig.rsi:.1f}' if sig.rsi else 'N/A'}, conf={sig.confidence:.2f}"
+
         if sig.trend not in ("BULLISH", "NEUTRAL"):
+            logger.info("[RD LONG] %s: %s → SKIP: trend=%s (need BULLISH/NEUTRAL)", symbol, diag, sig.trend)
             return None
 
         if not self._funding_ok(symbol):
-            logger.debug("RSIDiv LONG blocked for %s: high funding rate", symbol)
+            logger.info("[RD LONG] %s: %s → SKIP: high funding rate", symbol, diag)
             return None
 
         can_buy, reason = self._cooldown.can_buy(symbol)
         if not can_buy:
-            logger.debug("RSIDiv entry blocked for %s: %s", symbol, reason)
+            logger.info("[RD LONG] %s: %s → SKIP: %s", symbol, diag, reason)
             return None
 
+        logger.info("[RD LONG] %s: %s → SIGNAL GENERATED", symbol, diag)
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -337,19 +360,22 @@ class RSIDivergenceStrategy(Strategy):
 
     def _check_short_entry(self, symbol: str, sig: DivergenceSignal) -> Decision | None:
         """Check if a SHORT entry via bearish divergence is warranted."""
-        # Trend gate: BEARISH or NEUTRAL
+        diag = f"div={sig.divergence}, trend={sig.trend}, RSI={f'{sig.rsi:.1f}' if sig.rsi else 'N/A'}, conf={sig.confidence:.2f}"
+
         if sig.trend not in ("BEARISH", "NEUTRAL"):
+            logger.info("[RD SHORT] %s: %s → SKIP: trend=%s (need BEARISH/NEUTRAL)", symbol, diag, sig.trend)
             return None
 
         if not self._funding_ok(symbol):
-            logger.debug("RSIDiv SHORT blocked for %s: high funding rate", symbol)
+            logger.info("[RD SHORT] %s: %s → SKIP: high funding rate", symbol, diag)
             return None
 
         can_buy, reason = self._cooldown.can_buy(symbol)
         if not can_buy:
-            logger.debug("RSIDiv entry blocked for %s: %s", symbol, reason)
+            logger.info("[RD SHORT] %s: %s → SKIP: %s", symbol, diag, reason)
             return None
 
+        logger.info("[RD SHORT] %s: %s → SIGNAL GENERATED", symbol, diag)
         return Decision(
             action="SHORT",
             symbol=symbol,

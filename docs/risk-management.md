@@ -46,10 +46,11 @@ Ogni decisione passa attraverso `validate_decision()`:
 5. **Symbol required** → bloccato se non specificato
 6. **Max positions** → bloccato se >= max posizioni (dinamico o statico)
 7. **Duplicate** → bloccato se esiste gia' posizione sullo stesso coin
-8. **Min balance** → bloccato se balance < 50 USDC
-9. **Min confidence** → bloccato se confidence < 0.5
-10. **Position sizing** → calcolo Kelly Criterion
-11. **Auto SL/TP** → applicato automaticamente se non specificato
+8. **Spread check** → bloccato se bid-ask spread > max_spread_pct (BUY/SHORT)
+9. **Min balance** → bloccato se balance < 50 USDC
+10. **Min confidence** → bloccato se confidence < 0.5
+11. **Position sizing** → calcolo Kelly Criterion
+12. **Auto SL/TP** → applicato automaticamente se non specificato
 
 ### SL automatico (direction-aware)
 
@@ -82,14 +83,53 @@ max_positions = min(MAX_OPEN_POSITIONS, balance // USDC_PER_POSITION)
 max_positions = max(1, max_positions)  # floor a 1
 ```
 
-Esempio con `USDC_PER_POSITION=25`, `MAX_OPEN_POSITIONS=5`:
+Esempio con `USDC_PER_POSITION=25`, `MAX_OPEN_POSITIONS=15`:
 | Balance | Max Positions |
 |---|---|
 | 10 USDC | 1 (floor) |
 | 50 USDC | 2 |
 | 100 USDC | 4 |
-| 125 USDC | 5 (cap) |
-| 1000 USDC | 5 (cap) |
+| 375 USDC | 15 (cap) |
+| 1000 USDC | 15 (cap) |
+
+## Capital Utilization
+
+Il bot traccia l'utilizzo del capitale (margine usato / balance) e adatta il sizing dinamicamente.
+
+### Configurazione
+
+| Parametro | Default | Descrizione |
+|---|---|---|
+| `TARGET_UTILIZATION` | `0.50` | Target 50% del balance come margine |
+| `MAX_SIZE_BOOST` | `2.5` | Max moltiplicatore sul sizing base |
+
+### Boost Formula
+
+Quando l'utilizzo e' sotto il target, il sizing viene amplificato:
+
+```
+utilization = total_margin_used / balance
+if utilization < target:
+    boost = min(target / max(utilization, 0.05), max_size_boost)
+else:
+    boost = 1.0  # nessuna amplificazione
+```
+
+Il boost viene applicato al `size_pct` calcolato da Kelly (o cold-start) **prima** dell'hard cap `max_trade_pct`.
+
+### Esempio
+
+Con balance=990, margin_used=70 (7% utilizzo), target=50%:
+- `boost = min(0.50 / 0.07, 2.5) = min(7.14, 2.5) = 2.5`
+- Cold-start 5% → 5% * 2.5 = 12.5% (sotto hard cap 15%)
+
+### SCALE_UP
+
+L'AI advisor puo' raccomandare `SCALE_UP` su posizioni in profitto:
+- Aggiunge margine alla posizione esistente nella stessa direzione
+- Entry price viene ricalcolato come VWAP (media pesata)
+- Bloccato su posizioni in perdita
+- Validato dal Risk Manager (sizing, balance, utilization)
 
 ## Position Sizing (Kelly Criterion)
 
@@ -215,6 +255,40 @@ Con leva 2x e SL 1%, il rischio di liquidazione e' praticamente zero (servirebbe
 | Global | 15 min | Dopo 3 perdite consecutive |
 
 Il cooldown previene il "revenge trading" dopo le perdite.
+
+## Liquidity Filters
+
+### Discovery: 24h Volume Filter
+
+La discovery dei coins usa `meta_and_asset_ctxs()` per ottenere il volume 24h reale (`dayNtlVlm`) di ogni asset. I coins con volume sotto `MIN_PAIR_VOLUME` (default 50k USDC) vengono esclusi. I coins sono ordinati per volume decrescente, con i piu' liquidi che hanno priorita'. CORE_COINS (BTC, ETH, SOL) sono inclusi solo se superano il filtro volume.
+
+### Pre-entry Spread Check
+
+Prima di ogni BUY, SHORT o SCALE_UP, il Risk Manager controlla il bid-ask spread via L2 order book:
+
+```python
+spread_pct = (best_ask - best_bid) / mid * 100
+if spread_pct > max_spread_pct:  # default 0.5%
+    block("Spread too wide")
+```
+
+| Parametro | Default | Descrizione |
+|---|---|---|
+| `MAX_SPREAD_PCT` | `0.5` | Max spread % per entry. 0 = disabilitato. |
+
+Graceful degradation: se il L2 snapshot fallisce, l'entry viene comunque permessa.
+
+### Candle Volume Floor (Strategie)
+
+Ogni strategia (Mean Reversion, RSI Divergence) verifica il volume USDC della candela corrente prima di generare segnali:
+
+```python
+volume_usdc = close * volume  # ultima candela
+if volume_usdc < min_candle_volume_usdc:  # default 10,000 USDC
+    skip  # nessun segnale generato
+```
+
+Questo previene segnali su coins con grafico "a gradini" e volume zero (es. POLYX).
 
 ## Anti-Churning
 

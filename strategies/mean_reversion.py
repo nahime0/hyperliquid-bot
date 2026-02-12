@@ -4,19 +4,17 @@ Generates BUY/SHORT/SELL/CLOSE decisions autonomously.
 The AI is demoted to an optional review/veto role.
 
 LONG Entry (ALL must be true):
-  - Trend filter BULLISH on 1h (EMA50 > EMA200, price > EMA50, slope > 0)
-  - RSI(14) < 25 on 15m (strict oversold)
+  - Trend filter BULLISH or NEUTRAL on 1h
+  - RSI(14) < 30 on 15m (oversold)
   - Price <= lower Bollinger Band on 15m
-  - Volume ratio >= 1.2 (above-average volume confirmation)
   - RSI on 1h < 60 (no macro divergence)
   - Cooldown passed for the symbol
   - No open position on the same symbol
 
 SHORT Entry (ALL must be true):
   - Trend filter BEARISH on 1h (EMA50 < EMA200, price < EMA50, slope < 0)
-  - RSI(14) > 75 on 15m (strict overbought)
+  - RSI(14) > 70 on 15m (overbought)
   - Price >= upper Bollinger Band on 15m
-  - Volume ratio >= 1.2
   - RSI on 1h > 40
   - Cooldown passed + no open position
 
@@ -37,7 +35,7 @@ from typing import Any
 import pandas as pd
 import ta as ta_lib
 
-from config.settings import RiskConfig
+from config.settings import RiskConfig, StrategyConfig
 from core.types import Decision
 from core.market_data import MarketData
 from risk.position_tracker import PositionTracker
@@ -50,15 +48,15 @@ logger = get_logger(__name__)
 
 # ── Signal thresholds ────────────────────────────────────────
 
-RSI_OVERSOLD = 25.0           # strict: only deep oversold
+RSI_OVERSOLD = 30.0           # standard oversold (was 25)
 RSI_OVERBOUGHT = 70.0         # exit for LONG
-RSI_OVERBOUGHT_ENTRY = 75.0   # entry for SHORT
+RSI_OVERBOUGHT_ENTRY = 70.0   # entry for SHORT (was 75)
 RSI_1H_MAX = 60.0             # macro RSI ceiling for LONG entries
 RSI_1H_MIN_SHORT = 40.0       # macro RSI floor for SHORT entries
 RSI_PERIOD = 14
 BB_PERIOD = 20
 BB_STD = 2.0
-MIN_VOLUME_RATIO = 1.2
+MIN_VOLUME_RATIO = 1.0        # no volume filter (was 1.2)
 
 
 # ── Data classes ─────────────────────────────────────────────
@@ -95,6 +93,7 @@ class MeanReversionStrategy(Strategy):
         risk_config: RiskConfig,
         coins: list[str] | None = None,
         interval: str = "15m",
+        min_candle_volume_usdc: float = 10_000.0,
     ) -> None:
         self._md = market_data
         self._trend = trend_filter
@@ -103,6 +102,7 @@ class MeanReversionStrategy(Strategy):
         self._rc = risk_config
         self._coins = coins or []
         self._interval = interval
+        self._min_candle_volume_usdc = min_candle_volume_usdc
         self._signals: dict[str, Signal] = {}
         self._funding_rates: dict[str, float] = {}
         self._max_funding_rate: float = 0.0005  # default, overridden from settings
@@ -148,6 +148,16 @@ class MeanReversionStrategy(Strategy):
 
             close = df["close"]
             volume = df["volume"]
+
+            # Volume floor: skip illiquid coins
+            if self._min_candle_volume_usdc > 0:
+                volume_usdc = float(close.iloc[-1] * volume.iloc[-1])
+                if volume_usdc < self._min_candle_volume_usdc:
+                    logger.debug(
+                        "Skipping %s: candle volume %.0f USDC < %.0f",
+                        symbol, volume_usdc, self._min_candle_volume_usdc,
+                    )
+                    return
 
             # RSI on entry timeframe (15m)
             rsi_series = ta_lib.momentum.RSIIndicator(close, window=RSI_PERIOD).rsi()
@@ -267,6 +277,7 @@ class MeanReversionStrategy(Strategy):
                 decisions.append(exit_decision)
 
         # ── ENTRY checks (LONG or SHORT, never both per symbol) ──
+        scanned = 0
         for symbol in self._coins:
             if symbol in open_symbols:
                 continue
@@ -275,6 +286,7 @@ class MeanReversionStrategy(Strategy):
             if not sig:
                 continue
 
+            scanned += 1
             entry_decision = self._check_long_entry(symbol, sig)
             if entry_decision:
                 decisions.append(entry_decision)
@@ -284,6 +296,11 @@ class MeanReversionStrategy(Strategy):
             if entry_decision:
                 decisions.append(entry_decision)
 
+        entries = sum(1 for d in decisions if d.action in ("BUY", "SHORT"))
+        logger.info(
+            "[MR SCAN] coins=%d, scanned=%d, signals_generated=%d",
+            len(self._coins), scanned, entries,
+        )
         return decisions
 
     def _check_long_exit(self, symbol: str, sig: Signal) -> Decision | None:
@@ -332,25 +349,41 @@ class MeanReversionStrategy(Strategy):
 
     def _check_long_entry(self, symbol: str, sig: Signal) -> Decision | None:
         """Check if a new LONG entry is warranted. ALL conditions must be true."""
-        if not self._trend.is_bullish(symbol):
+        # BB position label for diagnostics
+        bb_pos = "below_BB" if (sig.price and sig.bb_lower and sig.price <= sig.bb_lower * 1.005) else (
+            "above_BB" if (sig.price and sig.bb_upper and sig.price >= sig.bb_upper * 0.995) else "inside_BB"
+        )
+        diag = (
+            f"trend={sig.trend}, RSI_15m={f'{sig.rsi:.1f}' if sig.rsi is not None else 'N/A'}, "
+            f"BB={bb_pos}, vol_ratio={sig.volume_ratio if sig.volume_ratio else 'N/A'}, "
+            f"RSI_1h={f'{sig.rsi_1h:.1f}' if sig.rsi_1h is not None else 'N/A'}"
+        )
+
+        if sig.trend not in ("BULLISH", "NEUTRAL"):
+            logger.info("[MR LONG] %s: %s → SKIP: trend not bullish/neutral", symbol, diag)
             return None
         if sig.rsi is None or sig.rsi >= RSI_OVERSOLD:
+            logger.info("[MR LONG] %s: %s → SKIP: RSI >= %.0f", symbol, diag, RSI_OVERSOLD)
             return None
         if sig.price is None or sig.bb_lower is None or sig.price > sig.bb_lower * 1.005:
+            logger.info("[MR LONG] %s: %s → SKIP: price not near lower BB", symbol, diag)
             return None
-        if sig.volume_ratio is None or sig.volume_ratio < MIN_VOLUME_RATIO:
+        if sig.volume_ratio is not None and sig.volume_ratio < MIN_VOLUME_RATIO:
+            logger.info("[MR LONG] %s: %s → SKIP: vol_ratio < %.1f", symbol, diag, MIN_VOLUME_RATIO)
             return None
         if sig.rsi_1h is not None and sig.rsi_1h >= RSI_1H_MAX:
+            logger.info("[MR LONG] %s: %s → SKIP: RSI_1h >= %.0f", symbol, diag, RSI_1H_MAX)
             return None
         if not self._funding_ok(symbol):
-            logger.debug("LONG entry blocked for %s: high funding rate", symbol)
+            logger.info("[MR LONG] %s: %s → SKIP: high funding rate", symbol, diag)
             return None
 
         can_buy, reason = self._cooldown.can_buy(symbol)
         if not can_buy:
-            logger.debug("Entry blocked for %s: %s", symbol, reason)
+            logger.info("[MR LONG] %s: %s → SKIP: %s", symbol, diag, reason)
             return None
 
+        logger.info("[MR LONG] %s: %s → SIGNAL GENERATED", symbol, diag)
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -370,25 +403,40 @@ class MeanReversionStrategy(Strategy):
 
     def _check_short_entry(self, symbol: str, sig: Signal) -> Decision | None:
         """Check if a new SHORT entry is warranted. ALL conditions must be true."""
+        bb_pos = "below_BB" if (sig.price and sig.bb_lower and sig.price <= sig.bb_lower * 1.005) else (
+            "above_BB" if (sig.price and sig.bb_upper and sig.price >= sig.bb_upper * 0.995) else "inside_BB"
+        )
+        diag = (
+            f"trend={sig.trend}, RSI_15m={f'{sig.rsi:.1f}' if sig.rsi is not None else 'N/A'}, "
+            f"BB={bb_pos}, vol_ratio={sig.volume_ratio if sig.volume_ratio else 'N/A'}, "
+            f"RSI_1h={f'{sig.rsi_1h:.1f}' if sig.rsi_1h is not None else 'N/A'}"
+        )
+
         if not self._trend.is_bearish(symbol):
+            logger.info("[MR SHORT] %s: %s → SKIP: trend not bearish", symbol, diag)
             return None
         if sig.rsi is None or sig.rsi <= RSI_OVERBOUGHT_ENTRY:
+            logger.info("[MR SHORT] %s: %s → SKIP: RSI <= %.0f", symbol, diag, RSI_OVERBOUGHT_ENTRY)
             return None
         if sig.price is None or sig.bb_upper is None or sig.price < sig.bb_upper * 0.995:
+            logger.info("[MR SHORT] %s: %s → SKIP: price not near upper BB", symbol, diag)
             return None
-        if sig.volume_ratio is None or sig.volume_ratio < MIN_VOLUME_RATIO:
+        if sig.volume_ratio is not None and sig.volume_ratio < MIN_VOLUME_RATIO:
+            logger.info("[MR SHORT] %s: %s → SKIP: vol_ratio < %.1f", symbol, diag, MIN_VOLUME_RATIO)
             return None
         if sig.rsi_1h is not None and sig.rsi_1h <= RSI_1H_MIN_SHORT:
+            logger.info("[MR SHORT] %s: %s → SKIP: RSI_1h <= %.0f", symbol, diag, RSI_1H_MIN_SHORT)
             return None
         if not self._funding_ok(symbol):
-            logger.debug("SHORT entry blocked for %s: high funding rate", symbol)
+            logger.info("[MR SHORT] %s: %s → SKIP: high funding rate", symbol, diag)
             return None
 
         can_buy, reason = self._cooldown.can_buy(symbol)
         if not can_buy:
-            logger.debug("Entry blocked for %s: %s", symbol, reason)
+            logger.info("[MR SHORT] %s: %s → SKIP: %s", symbol, diag, reason)
             return None
 
+        logger.info("[MR SHORT] %s: %s → SIGNAL GENERATED", symbol, diag)
         return Decision(
             action="SHORT",
             symbol=symbol,
