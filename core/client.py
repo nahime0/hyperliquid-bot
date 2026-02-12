@@ -209,27 +209,13 @@ class HyperliquidClient:
         )
 
     async def get_account_balance(self) -> float:
-        """Get total available balance (perp accountValue + spot USDC).
+        """Get total account value from Hyperliquid perp marginSummary.
 
-        On unified accounts, USDC sits in spotClearinghouseState while
-        perp accountValue only reflects margin used by open positions.
+        accountValue = idle USDC + margin in use + unrealized PnL.
+        This is the single source of truth for the account equity.
         """
-        # Perp margin value (unrealized PnL + margin in use)
         state = await self.get_user_state()
-        perp_value = float(state.get("marginSummary", {}).get("accountValue", 0))
-
-        # Spot USDC balance (where idle funds live on unified accounts)
-        spot_usdc = 0.0
-        try:
-            spot_state = await self.get_spot_state()
-            for bal in spot_state.get("balances", []):
-                if bal.get("coin") == "USDC":
-                    spot_usdc = float(bal.get("total", 0))
-                    break
-        except Exception:
-            logger.debug("Could not fetch spot state, using perp-only balance")
-
-        return perp_value + spot_usdc
+        return float(state.get("marginSummary", {}).get("accountValue", 0))
 
     async def get_open_positions(self) -> list[dict[str, Any]]:
         """Get open perpetual positions with size, entry, PnL, liquidation.
