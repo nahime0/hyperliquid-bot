@@ -435,11 +435,8 @@ class RiskManager:
             return
 
     async def check_consecutive_losses(self) -> None:
-        """Check for 5 consecutive losses.  Call after each trade."""
-        stats = await self._db.get_trade_stats()
-        consec = stats.get("consecutive_losses", 0)
-        if consec >= 5 and not self._kill_switch:
-            await self._trigger_kill(f"{consec} consecutive losses")
+        """Check for consecutive losses — handled by cooldown system, not kill switch."""
+        pass
 
     async def _trigger_kill(self, reason: str) -> None:
         self._kill_switch = True

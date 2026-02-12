@@ -253,19 +253,19 @@ class TestKillSwitch:
         assert rm._kill_switch is False
 
     @pytest.mark.asyncio
-    async def test_consecutive_losses_kill(self, db, risk_config):
+    async def test_consecutive_losses_no_kill_switch(self, db, risk_config):
+        """Consecutive losses are handled by cooldown, not kill switch."""
         client = MockClient(balance=1000)
         rm = RiskManager(risk_config, client, db)
         rm._peak_balance = 1000.0
         rm._current_balance = 1000.0
-        # Insert 5 consecutive losing trades
         for i in range(5):
             await db.insert_trade(
                 symbol="ETH", side="SELL", price=2000, quantity=0.1,
                 pnl=-10.0, strategy="test",
             )
         await rm.check_consecutive_losses()
-        assert rm._kill_switch is True
+        assert rm._kill_switch is False
 
     @pytest.mark.asyncio
     async def test_reset_kill_switch(self, db, risk_config):
