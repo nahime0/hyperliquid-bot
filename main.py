@@ -181,14 +181,20 @@ class Bot:
         )
         logger.info("Active coins: %d", len(self._active_coins))
 
-        # Set leverage for core coins
+        # Set leverage for all active coins (core + discovered + open positions)
         is_cross = cfg.margin_mode == "cross"
-        for coin in CORE_COINS:
-            if coin in self._active_coins:
-                try:
-                    await self._client.update_leverage(coin, cfg.default_leverage, is_cross)
-                except Exception:
-                    logger.debug("Failed to set leverage for %s", coin, exc_info=True)
+        coins_to_set = set(self._active_coins)
+        # Also include coins with open positions on HL (may not be in active list)
+        try:
+            hl_positions = await self._client.get_open_positions()
+            coins_to_set |= {p["coin"] for p in hl_positions}
+        except Exception:
+            pass
+        for coin in coins_to_set:
+            try:
+                await self._client.update_leverage(coin, cfg.default_leverage, is_cross)
+            except Exception:
+                logger.debug("Failed to set leverage for %s", coin, exc_info=True)
 
         # Market data — start WebSocket feeds with configured intervals
         intervals = list(self._settings.market.intervals)
