@@ -88,6 +88,57 @@ CREATE TABLE IF NOT EXISTS positions (
 
 CREATE INDEX IF NOT EXISTS idx_positions_status ON positions(status);
 CREATE INDEX IF NOT EXISTS idx_positions_symbol ON positions(symbol);
+
+CREATE TABLE IF NOT EXISTS coins (
+    symbol TEXT PRIMARY KEY,
+    first_seen TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    last_seen TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    is_active INTEGER NOT NULL DEFAULT 1,
+    sz_decimals INTEGER,
+    avg_volume_24h REAL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    cycle INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    source TEXT NOT NULL,
+    action TEXT,
+    confidence REAL,
+    reasoning TEXT,
+    details TEXT DEFAULT '{}',
+    position_id INTEGER,
+    trade_id INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_symbol ON events(symbol);
+CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp);
+CREATE INDEX IF NOT EXISTS idx_events_event_type ON events(event_type);
+CREATE INDEX IF NOT EXISTS idx_events_cycle ON events(cycle);
+
+CREATE TABLE IF NOT EXISTS cycle_summaries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    cycle INTEGER UNIQUE NOT NULL,
+    duration_sec REAL,
+    balance_usdc REAL,
+    drawdown_pct REAL,
+    daily_drawdown_pct REAL,
+    open_positions INTEGER,
+    capital_utilization REAL,
+    coins_monitored INTEGER,
+    signals_generated INTEGER DEFAULT 0,
+    decisions_approved INTEGER DEFAULT 0,
+    decisions_blocked INTEGER DEFAULT 0,
+    trades_executed INTEGER DEFAULT 0,
+    kill_switch INTEGER DEFAULT 0,
+    daily_paused INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_cycle_summaries_cycle ON cycle_summaries(cycle);
+CREATE INDEX IF NOT EXISTS idx_cycle_summaries_timestamp ON cycle_summaries(timestamp);
 """
 
 _MIGRATIONS = [
@@ -290,6 +341,102 @@ class Database:
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    # ── Coins ────────────────────────────────────────────────
+
+    async def upsert_coin(
+        self,
+        symbol: str,
+        sz_decimals: int | None = None,
+        avg_volume_24h: float = 0,
+    ) -> None:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        await self.db.execute(
+            """INSERT INTO coins (symbol, first_seen, last_seen, is_active, sz_decimals, avg_volume_24h)
+               VALUES (?, ?, ?, 1, ?, ?)
+               ON CONFLICT(symbol) DO UPDATE SET
+                   last_seen = excluded.last_seen,
+                   is_active = 1,
+                   sz_decimals = COALESCE(excluded.sz_decimals, coins.sz_decimals),
+                   avg_volume_24h = excluded.avg_volume_24h""",
+            (symbol, now, now, sz_decimals, avg_volume_24h),
+        )
+        await self.db.commit()
+
+    # ── Events ───────────────────────────────────────────────
+
+    async def insert_event(
+        self,
+        cycle: int,
+        symbol: str,
+        event_type: str,
+        source: str,
+        action: str | None = None,
+        confidence: float | None = None,
+        reasoning: str | None = None,
+        details: dict[str, Any] | None = None,
+        position_id: int | None = None,
+        trade_id: int | None = None,
+    ) -> int:
+        cursor = await self.db.execute(
+            """INSERT INTO events
+               (cycle, symbol, event_type, source, action, confidence, reasoning, details, position_id, trade_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (cycle, symbol, event_type, source, action, confidence, reasoning,
+             json.dumps(details or {}), position_id, trade_id),
+        )
+        await self.db.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
+
+    async def get_events_by_symbol(self, symbol: str, limit: int = 100) -> list[dict[str, Any]]:
+        cursor = await self.db.execute(
+            "SELECT * FROM events WHERE symbol = ? ORDER BY id DESC LIMIT ?",
+            (symbol, limit),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_events_by_cycle(self, cycle: int) -> list[dict[str, Any]]:
+        cursor = await self.db.execute(
+            "SELECT * FROM events WHERE cycle = ? ORDER BY id",
+            (cycle,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    # ── Cycle Summaries ──────────────────────────────────────
+
+    async def insert_cycle_summary(
+        self,
+        cycle: int,
+        duration_sec: float | None = None,
+        balance_usdc: float | None = None,
+        drawdown_pct: float | None = None,
+        daily_drawdown_pct: float | None = None,
+        open_positions: int | None = None,
+        capital_utilization: float | None = None,
+        coins_monitored: int | None = None,
+        signals_generated: int = 0,
+        decisions_approved: int = 0,
+        decisions_blocked: int = 0,
+        trades_executed: int = 0,
+        kill_switch: bool = False,
+        daily_paused: bool = False,
+    ) -> int:
+        cursor = await self.db.execute(
+            """INSERT INTO cycle_summaries
+               (cycle, duration_sec, balance_usdc, drawdown_pct, daily_drawdown_pct,
+                open_positions, capital_utilization, coins_monitored,
+                signals_generated, decisions_approved, decisions_blocked,
+                trades_executed, kill_switch, daily_paused)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (cycle, duration_sec, balance_usdc, drawdown_pct, daily_drawdown_pct,
+             open_positions, capital_utilization, coins_monitored,
+             signals_generated, decisions_approved, decisions_blocked,
+             trades_executed, int(kill_switch), int(daily_paused)),
+        )
+        await self.db.commit()
+        return cursor.lastrowid  # type: ignore[return-value]
 
     # ── Stats helpers ───────────────────────────────────────
 
