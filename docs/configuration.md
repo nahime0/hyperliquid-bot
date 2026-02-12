@@ -43,7 +43,7 @@ Tutte le configurazioni sono gestite tramite variabili d'ambiente caricate da `.
 | `MAX_TOTAL_DRAWDOWN_PCT` | `15.0` | float | Drawdown totale max dal peak. Supera → kill switch. |
 | `MAX_OPEN_POSITIONS` | `5` | int | Max posizioni aperte (hard cap per dynamic, valore fisso se static). |
 | `DYNAMIC_POSITIONS` | `true` | bool | Scala max posizioni con balance (1 slot ogni USDC_PER_POSITION). |
-| `USDC_PER_POSITION` | `200.0` | float | USDC necessari per ogni slot di posizione. |
+| `USDC_PER_POSITION` | `25.0` | float | USDC necessari per ogni slot di posizione. |
 | `AUTO_TAKE_PROFIT` | `false` | bool | Se true, genera TP automatico. Se false, il trailing stop gestisce i profitti. |
 | `MIN_BALANCE_USDC` | `50.0` | float | Balance minimo. Sotto → kill switch. |
 | `MIN_HOLDING_MINUTES` | `15` | int | Tempo minimo di holding prima che l'AI possa chiudere una posizione. |

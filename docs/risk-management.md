@@ -82,13 +82,14 @@ max_positions = min(MAX_OPEN_POSITIONS, balance // USDC_PER_POSITION)
 max_positions = max(1, max_positions)  # floor a 1
 ```
 
-Esempio con `USDC_PER_POSITION=200`, `MAX_OPEN_POSITIONS=5`:
+Esempio con `USDC_PER_POSITION=25`, `MAX_OPEN_POSITIONS=5`:
 | Balance | Max Positions |
 |---|---|
-| 100 USDC | 1 |
-| 400 USDC | 2 |
+| 10 USDC | 1 (floor) |
+| 50 USDC | 2 |
+| 100 USDC | 4 |
+| 125 USDC | 5 (cap) |
 | 1000 USDC | 5 (cap) |
-| 2000 USDC | 5 (cap) |
 
 ## Position Sizing (Kelly Criterion)
 

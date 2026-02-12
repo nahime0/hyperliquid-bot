@@ -37,7 +37,7 @@ class TestRiskConfig:
         assert c.min_balance_usdc == 50.0
         assert c.auto_take_profit is False
         assert c.dynamic_positions is True
-        assert c.usdc_per_position == 200.0
+        assert c.usdc_per_position == 25.0
         assert c.trailing_breakeven_pct == 1.0
         assert c.trailing_start_pct == 1.5
         assert c.trailing_distance_pct == 1.0

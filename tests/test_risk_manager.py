@@ -271,36 +271,36 @@ class TestKillSwitch:
 
 
 class TestDynamicPositions:
-    def test_dynamic_scales_with_balance(self):
-        """1000 USDC / 200 per slot = 5 slots."""
-        rc = RiskConfig(dynamic_positions=True, usdc_per_position=200.0, max_open_positions=10)
-        client = MockClient(balance=1000)
-        rm = RiskManager(rc, client, MagicMock())
-        rm._current_balance = 1000.0
-        assert rm._effective_max_positions() == 5
-
-    def test_dynamic_caps_at_max(self):
-        """5000 USDC / 200 = 25, but capped at max_open_positions=10."""
-        rc = RiskConfig(dynamic_positions=True, usdc_per_position=200.0, max_open_positions=10)
-        client = MockClient(balance=5000)
-        rm = RiskManager(rc, client, MagicMock())
-        rm._current_balance = 5000.0
-        assert rm._effective_max_positions() == 10
-
-    def test_dynamic_floor_at_one(self):
-        """100 USDC / 200 = 0, but floor at 1."""
-        rc = RiskConfig(dynamic_positions=True, usdc_per_position=200.0)
+    def test_dynamic_100_usdc_4_slots(self):
+        """100 USDC / 25 per slot = 4 slots (production scenario)."""
+        rc = RiskConfig(dynamic_positions=True, usdc_per_position=25.0, max_open_positions=5)
         client = MockClient(balance=100)
         rm = RiskManager(rc, client, MagicMock())
         rm._current_balance = 100.0
-        assert rm._effective_max_positions() == 1
+        assert rm._effective_max_positions() == 4
 
-    def test_dynamic_small_balance(self):
-        """250 USDC / 200 = 1 slot."""
-        rc = RiskConfig(dynamic_positions=True, usdc_per_position=200.0, max_open_positions=10)
-        client = MockClient(balance=250)
+    def test_dynamic_scales_with_balance(self):
+        """500 USDC / 25 = 20, capped at max_open_positions=5."""
+        rc = RiskConfig(dynamic_positions=True, usdc_per_position=25.0, max_open_positions=5)
+        client = MockClient(balance=500)
         rm = RiskManager(rc, client, MagicMock())
-        rm._current_balance = 250.0
+        rm._current_balance = 500.0
+        assert rm._effective_max_positions() == 5
+
+    def test_dynamic_caps_at_max(self):
+        """1000 USDC / 25 = 40, but capped at max_open_positions=10."""
+        rc = RiskConfig(dynamic_positions=True, usdc_per_position=25.0, max_open_positions=10)
+        client = MockClient(balance=1000)
+        rm = RiskManager(rc, client, MagicMock())
+        rm._current_balance = 1000.0
+        assert rm._effective_max_positions() == 10
+
+    def test_dynamic_floor_at_one(self):
+        """10 USDC / 25 = 0, but floor at 1."""
+        rc = RiskConfig(dynamic_positions=True, usdc_per_position=25.0)
+        client = MockClient(balance=10)
+        rm = RiskManager(rc, client, MagicMock())
+        rm._current_balance = 10.0
         assert rm._effective_max_positions() == 1
 
     def test_static_ignores_balance(self):
@@ -313,20 +313,20 @@ class TestDynamicPositions:
 
     @pytest.mark.asyncio
     async def test_dynamic_blocks_entry_when_full(self, db):
-        """Balance=400 → 2 slots, with 2 open → blocks new entry."""
-        rc = RiskConfig(dynamic_positions=True, usdc_per_position=200.0, max_open_positions=10)
-        client = MockClient(balance=400)
+        """Balance=100 → 4 slots, with 4 open → blocks new entry."""
+        rc = RiskConfig(dynamic_positions=True, usdc_per_position=25.0, max_open_positions=5)
+        client = MockClient(balance=100)
         pt = PositionTracker(db, rc)
         rm = RiskManager(rc, client, db, position_tracker=pt)
-        rm._current_balance = 400.0
-        rm._peak_balance = 400.0
-        rm._open_position_count = 2  # 2/2 full
+        rm._current_balance = 100.0
+        rm._peak_balance = 100.0
+        rm._open_position_count = 4  # 4/4 full
 
         d = Decision(action="BUY", confidence=0.8, reasoning="sig", symbol="SOL")
         result = await rm.validate_decision(d)
         assert result.approved is False
         assert "Max open positions" in result.reason
-        assert "2/2" in result.reason
+        assert "4/4" in result.reason
 
 
 # ── Risk metrics ────────────────────────────────────────────

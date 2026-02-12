@@ -53,7 +53,7 @@ class RiskConfig:
     max_total_drawdown_pct: float = 15.0
     max_open_positions: int = 5         # hard cap (or static value if dynamic disabled)
     dynamic_positions: bool = True      # scale max positions with balance
-    usdc_per_position: float = 200.0   # 1 position slot per N USDC
+    usdc_per_position: float = 25.0    # 1 position slot per N USDC (100 USDC → 4 slots)
     min_balance_usdc: float = 50.0
     min_holding_minutes: int = 15  # minimum time before AI can close a position
     max_leverage: int = 3
@@ -143,7 +143,7 @@ def load_settings() -> Settings:
             max_total_drawdown_pct=float(os.getenv("MAX_TOTAL_DRAWDOWN_PCT", "15.0")),
             max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "5")),
             dynamic_positions=_bool(os.getenv("DYNAMIC_POSITIONS"), default=True),
-            usdc_per_position=float(os.getenv("USDC_PER_POSITION", "200.0")),
+            usdc_per_position=float(os.getenv("USDC_PER_POSITION", "25.0")),
             min_balance_usdc=float(os.getenv("MIN_BALANCE_USDC", "50.0")),
             min_holding_minutes=int(os.getenv("MIN_HOLDING_MINUTES", "15")),
             trailing_breakeven_pct=float(os.getenv("TRAILING_BREAKEVEN_PCT", "1.0")),
