@@ -781,7 +781,7 @@ class Bot:
             except asyncio.TimeoutError:
                 pass
             try:
-                n = len(self._tracker.open_positions)
+                n = len(self._positions.open_positions)
                 if n:
                     logger.info("SL/TP check: %d open position(s)", n)
                 async with self._close_lock:
