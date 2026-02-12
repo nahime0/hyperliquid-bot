@@ -7,6 +7,9 @@ import type {
   Event,
   CycleSummary,
   TradeStats,
+  AiDecision,
+  Order,
+  DeferredOpportunity,
 } from "./types";
 
 // ── Positions ──────────────────────────────────────────────
@@ -21,6 +24,13 @@ export function getClosedPositions(limit = 50, offset = 0): Position[] {
   return getDb()
     .prepare("SELECT * FROM positions WHERE status = 'CLOSED' ORDER BY closed_at DESC LIMIT ? OFFSET ?")
     .all(limit, offset) as Position[];
+}
+
+export function getClosedPositionCount(): number {
+  const row = getDb()
+    .prepare("SELECT COUNT(*) as cnt FROM positions WHERE status = 'CLOSED'")
+    .get() as { cnt: number };
+  return row.cnt;
 }
 
 export function getPositionsBySymbol(symbol: string): Position[] {
@@ -169,6 +179,107 @@ export function getCycleSummaries(limit = 50): CycleSummary[] {
   return getDb()
     .prepare("SELECT * FROM cycle_summaries ORDER BY cycle DESC LIMIT ?")
     .all(limit) as CycleSummary[];
+}
+
+// ── AI Decisions ───────────────────────────────────────────
+
+export function getAiDecisions(limit = 50, offset = 0): AiDecision[] {
+  return getDb()
+    .prepare("SELECT * FROM ai_decisions ORDER BY id DESC LIMIT ? OFFSET ?")
+    .all(limit, offset) as AiDecision[];
+}
+
+export function getAiDecisionCount(): number {
+  const row = getDb()
+    .prepare("SELECT COUNT(*) as cnt FROM ai_decisions")
+    .get() as { cnt: number };
+  return row.cnt;
+}
+
+export function getAiDecisionsBySymbol(symbol: string, limit = 50): AiDecision[] {
+  return getDb()
+    .prepare("SELECT * FROM ai_decisions WHERE symbol = ? ORDER BY id DESC LIMIT ?")
+    .all(symbol, limit) as AiDecision[];
+}
+
+export function getAiStats() {
+  const total = getDb()
+    .prepare("SELECT COUNT(*) as cnt FROM ai_decisions")
+    .get() as { cnt: number };
+  const executed = getDb()
+    .prepare("SELECT COUNT(*) as cnt FROM ai_decisions WHERE executed = 1")
+    .get() as { cnt: number };
+  const costRow = getDb()
+    .prepare("SELECT COALESCE(SUM(cost_usd), 0) as total FROM ai_decisions WHERE cost_usd IS NOT NULL")
+    .get() as { total: number };
+  const avgConfidence = getDb()
+    .prepare("SELECT COALESCE(AVG(confidence), 0) as avg FROM ai_decisions WHERE confidence IS NOT NULL")
+    .get() as { avg: number };
+  const byTier = getDb()
+    .prepare("SELECT tier, COUNT(*) as cnt FROM ai_decisions WHERE tier IS NOT NULL GROUP BY tier ORDER BY cnt DESC")
+    .all() as { tier: string; cnt: number }[];
+  const byAction = getDb()
+    .prepare("SELECT action, COUNT(*) as cnt FROM ai_decisions GROUP BY action ORDER BY cnt DESC")
+    .all() as { action: string; cnt: number }[];
+
+  return {
+    total_decisions: total.cnt,
+    executed_count: executed.cnt,
+    execution_rate: total.cnt > 0 ? executed.cnt / total.cnt : 0,
+    total_cost_usd: costRow.total,
+    avg_confidence: avgConfidence.avg,
+    by_tier: byTier,
+    by_action: byAction,
+  };
+}
+
+// ── Orders ─────────────────────────────────────────────────
+
+export function getOrders(limit = 50, offset = 0): Order[] {
+  return getDb()
+    .prepare("SELECT * FROM orders ORDER BY id DESC LIMIT ? OFFSET ?")
+    .all(limit, offset) as Order[];
+}
+
+export function getOrderCount(): number {
+  const row = getDb()
+    .prepare("SELECT COUNT(*) as cnt FROM orders")
+    .get() as { cnt: number };
+  return row.cnt;
+}
+
+// ── Deferred Opportunities ─────────────────────────────────
+
+export function getDeferredOpportunities(): DeferredOpportunity[] {
+  return getDb()
+    .prepare("SELECT * FROM deferred_opportunities ORDER BY created_at DESC")
+    .all() as DeferredOpportunity[];
+}
+
+// ── Dashboard status (from DB) ──────────────────────────────
+
+export function getLatestCycleSummary(): CycleSummary | undefined {
+  return getDb()
+    .prepare("SELECT * FROM cycle_summaries ORDER BY cycle DESC LIMIT 1")
+    .get() as CycleSummary | undefined;
+}
+
+export function getBotState(key: string): string | undefined {
+  const row = getDb()
+    .prepare("SELECT value FROM bot_state WHERE key = ?")
+    .get(key) as { value: string } | undefined;
+  return row?.value;
+}
+
+export function getAllBotState(): Record<string, string> {
+  const rows = getDb()
+    .prepare("SELECT key, value FROM bot_state")
+    .all() as { key: string; value: string }[];
+  const result: Record<string, string> = {};
+  for (const row of rows) {
+    result[row.key] = row.value;
+  }
+  return result;
 }
 
 // ── Aggregate stats ────────────────────────────────────────

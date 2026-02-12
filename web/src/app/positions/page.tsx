@@ -2,86 +2,144 @@
 
 import { useState } from "react";
 import { useOpenPositions, useClosedPositions } from "@/hooks/usePositions";
-import { useStatus } from "@/hooks/useStatus";
-import { Card } from "@/components/shared/Card";
+import { Card, Skeleton } from "@/components/shared/Card";
 import { PnlBadge } from "@/components/shared/PnlBadge";
 import { DirectionBadge } from "@/components/shared/DirectionBadge";
+import { StatusBadge } from "@/components/shared/StatusBadge";
 import { TimeAgo } from "@/components/shared/TimeAgo";
-import { formatPrice, formatPct, formatDuration, parseTimestamp } from "@/lib/format";
+import { EmptyState } from "@/components/shared/EmptyState";
+import { Pagination } from "@/components/shared/Pagination";
+import { formatPrice, formatDuration, formatUsd, parseTimestamp } from "@/lib/format";
+import type { Position } from "@/lib/types";
+
+function PositionDetail({ position: p }: { position: Position }) {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-bg-secondary rounded-lg border border-border-light text-xs">
+      <div>
+        <span className="text-text-muted block mb-0.5">Entry Price</span>
+        <span className="font-mono font-medium text-text-primary">{formatPrice(p.entry_price)}</span>
+      </div>
+      <div>
+        <span className="text-text-muted block mb-0.5">Quantity</span>
+        <span className="font-mono font-medium text-text-primary">{p.quantity.toFixed(6)}</span>
+      </div>
+      <div>
+        <span className="text-text-muted block mb-0.5">Stop Loss</span>
+        <span className="font-mono font-medium text-text-primary">{p.stop_loss ? formatPrice(p.stop_loss) : "—"}</span>
+        {p.original_sl && p.original_sl !== p.stop_loss && (
+          <span className="text-text-muted block">orig: {formatPrice(p.original_sl)}</span>
+        )}
+      </div>
+      <div>
+        <span className="text-text-muted block mb-0.5">Take Profit</span>
+        <span className="font-mono font-medium text-text-primary">{p.take_profit ? formatPrice(p.take_profit) : "—"}</span>
+      </div>
+      <div>
+        <span className="text-text-muted block mb-0.5">Trailing SL</span>
+        <span className="font-mono font-medium text-warning">{p.trailing_sl ? formatPrice(p.trailing_sl) : "—"}</span>
+      </div>
+      <div>
+        <span className="text-text-muted block mb-0.5">Liquidation</span>
+        <span className="font-mono font-medium text-loss">{p.liquidation_price ? formatPrice(p.liquidation_price) : "—"}</span>
+      </div>
+      <div>
+        <span className="text-text-muted block mb-0.5">Funding Paid</span>
+        <span className={`font-mono font-medium ${p.funding_paid < 0 ? "text-loss" : p.funding_paid > 0 ? "text-profit" : "text-text-muted"}`}>
+          {p.funding_paid !== 0 ? formatUsd(p.funding_paid) : "—"}
+        </span>
+      </div>
+      <div>
+        <span className="text-text-muted block mb-0.5">
+          {p.direction === "LONG" ? "Max Price" : "Min Price"}
+        </span>
+        <span className="font-mono font-medium text-text-primary">
+          {p.direction === "LONG"
+            ? p.max_price_seen ? formatPrice(p.max_price_seen) : "—"
+            : p.min_price_seen ? formatPrice(p.min_price_seen) : "—"
+          }
+        </span>
+      </div>
+      {p.exit_price && (
+        <div>
+          <span className="text-text-muted block mb-0.5">Exit Price</span>
+          <span className="font-mono font-medium text-text-primary">{formatPrice(p.exit_price)}</span>
+        </div>
+      )}
+      {p.close_reason && (
+        <div>
+          <span className="text-text-muted block mb-0.5">Close Reason</span>
+          <span className="font-medium text-text-secondary">{p.close_reason}</span>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function OpenTab() {
-  const { positions } = useOpenPositions();
-  const { status } = useStatus();
+  const { positions, isLoading } = useOpenPositions();
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
 
-  const getMidPrice = (symbol: string): number | null => {
-    if (!status?.strategies) return null;
-    const strats = status.strategies as Record<string, unknown>;
-    const subs = strats.sub_strategies as Record<string, { signals?: Record<string, { price?: number }> }> | undefined;
-    if (subs) {
-      for (const sub of Object.values(subs)) {
-        if (sub.signals?.[symbol]?.price) return sub.signals[symbol].price;
-      }
-    }
-    const signals = strats.signals as Record<string, { price?: number }> | undefined;
-    if (signals?.[symbol]?.price) return signals[symbol].price;
-    return null;
+  const toggle = (id: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
   };
 
+  if (isLoading) return <Skeleton className="w-full h-40" />;
+
   if (positions.length === 0) {
-    return <p className="text-text-muted text-sm py-8 text-center">No open positions</p>;
+    return <EmptyState title="No open positions" description="Positions will appear here when the bot enters trades" />;
   }
 
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="text-text-muted text-xs border-b border-border">
-            <th className="text-left pb-2 pr-3">Symbol</th>
-            <th className="text-left pb-2 pr-3">Direction</th>
-            <th className="text-right pb-2 pr-3">Entry</th>
-            <th className="text-right pb-2 pr-3">Current</th>
-            <th className="text-right pb-2 pr-3">Qty</th>
-            <th className="text-right pb-2 pr-3">PnL</th>
-            <th className="text-right pb-2 pr-3">PnL %</th>
-            <th className="text-right pb-2 pr-3">SL</th>
-            <th className="text-right pb-2 pr-3">TP</th>
-            <th className="text-right pb-2 pr-3">Trail SL</th>
-            <th className="text-right pb-2 pr-3">Lev</th>
-            <th className="text-left pb-2 pr-3">Strategy</th>
-            <th className="text-right pb-2">Opened</th>
+          <tr className="text-text-muted text-[11px] uppercase tracking-wider border-b border-border">
+            <th className="w-6 py-2.5 px-3" />
+            <th className="text-left py-2.5 px-2">Symbol</th>
+            <th className="text-left py-2.5 px-2">Direction</th>
+            <th className="text-right py-2.5 px-2">Entry</th>
+            <th className="text-right py-2.5 px-2">Qty</th>
+            <th className="text-right py-2.5 px-2">SL</th>
+            <th className="text-right py-2.5 px-2">TP</th>
+            <th className="text-right py-2.5 px-2">Trail SL</th>
+            <th className="text-right py-2.5 px-2">Leverage</th>
+            <th className="text-left py-2.5 px-2">Strategy</th>
+            <th className="text-right py-2.5 px-3">Opened</th>
           </tr>
         </thead>
         <tbody>
-          {positions.map((p) => {
-            const mid = getMidPrice(p.symbol);
-            let pnl = 0;
-            let pnlPct = 0;
-            if (mid) {
-              pnl = p.direction === "LONG"
-                ? (mid - p.entry_price) * p.quantity
-                : (p.entry_price - mid) * p.quantity;
-              pnlPct = p.direction === "LONG"
-                ? ((mid - p.entry_price) / p.entry_price) * 100
-                : ((p.entry_price - mid) / p.entry_price) * 100;
-            }
-            return (
-              <tr key={p.id} className="border-b border-border/50 hover:bg-bg-card-hover">
-                <td className="py-2 pr-3 font-medium">{p.symbol}</td>
-                <td className="py-2 pr-3"><DirectionBadge direction={p.direction} /></td>
-                <td className="py-2 pr-3 text-right font-mono">{formatPrice(p.entry_price)}</td>
-                <td className="py-2 pr-3 text-right font-mono">{mid ? formatPrice(mid) : "—"}</td>
-                <td className="py-2 pr-3 text-right font-mono">{p.quantity.toFixed(6)}</td>
-                <td className="py-2 pr-3 text-right">{mid ? <PnlBadge value={pnl} /> : "—"}</td>
-                <td className="py-2 pr-3 text-right">{mid ? <PnlBadge value={pnlPct} type="pct" /> : "—"}</td>
-                <td className="py-2 pr-3 text-right font-mono text-text-muted">{p.stop_loss ? formatPrice(p.stop_loss) : "—"}</td>
-                <td className="py-2 pr-3 text-right font-mono text-text-muted">{p.take_profit ? formatPrice(p.take_profit) : "—"}</td>
-                <td className="py-2 pr-3 text-right font-mono text-warning">{p.trailing_sl ? formatPrice(p.trailing_sl) : "—"}</td>
-                <td className="py-2 pr-3 text-right">{p.leverage}x</td>
-                <td className="py-2 pr-3 text-text-muted">{p.strategy}</td>
-                <td className="py-2 text-right"><TimeAgo date={p.opened_at} /></td>
+          {positions.map((p) => (
+            <>
+              <tr
+                key={p.id}
+                className="border-b border-border/40 hover:bg-bg-card-hover cursor-pointer transition-colors"
+                onClick={() => toggle(p.id)}
+              >
+                <td className="py-2.5 px-3 text-text-muted text-xs">{expanded.has(p.id) ? "▼" : "▶"}</td>
+                <td className="py-2.5 px-2 font-semibold text-text-primary">{p.symbol}</td>
+                <td className="py-2.5 px-2"><DirectionBadge direction={p.direction} /></td>
+                <td className="py-2.5 px-2 text-right font-mono text-text-secondary">{formatPrice(p.entry_price)}</td>
+                <td className="py-2.5 px-2 text-right font-mono text-text-secondary">{p.quantity.toFixed(4)}</td>
+                <td className="py-2.5 px-2 text-right font-mono text-text-muted">{p.stop_loss ? formatPrice(p.stop_loss) : "—"}</td>
+                <td className="py-2.5 px-2 text-right font-mono text-text-muted">{p.take_profit ? formatPrice(p.take_profit) : "—"}</td>
+                <td className="py-2.5 px-2 text-right font-mono text-warning">{p.trailing_sl ? formatPrice(p.trailing_sl) : "—"}</td>
+                <td className="py-2.5 px-2 text-right"><span className="text-accent font-medium">{p.leverage}x</span></td>
+                <td className="py-2.5 px-2 text-text-muted text-xs">{p.strategy}</td>
+                <td className="py-2.5 px-3 text-right"><TimeAgo date={p.opened_at} /></td>
               </tr>
-            );
-          })}
+              {expanded.has(p.id) && (
+                <tr key={`${p.id}-detail`}>
+                  <td colSpan={11} className="p-3">
+                    <PositionDetail position={p} />
+                  </td>
+                </tr>
+              )}
+            </>
+          ))}
         </tbody>
       </table>
     </div>
@@ -91,10 +149,21 @@ function OpenTab() {
 function ClosedTab() {
   const [page, setPage] = useState(0);
   const limit = 25;
-  const { positions } = useClosedPositions(limit, page * limit);
+  const { positions, isLoading } = useClosedPositions(limit, page * limit);
+  const [expanded, setExpanded] = useState<Set<number>>(new Set());
+
+  const toggle = (id: number) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  if (isLoading && page === 0) return <Skeleton className="w-full h-40" />;
 
   if (positions.length === 0 && page === 0) {
-    return <p className="text-text-muted text-sm py-8 text-center">No closed positions</p>;
+    return <EmptyState title="No closed positions" description="Position history will appear here" />;
   }
 
   return (
@@ -102,16 +171,17 @@ function ClosedTab() {
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
           <thead>
-            <tr className="text-text-muted text-xs border-b border-border">
-              <th className="text-left pb-2 pr-3">Symbol</th>
-              <th className="text-left pb-2 pr-3">Direction</th>
-              <th className="text-right pb-2 pr-3">Entry</th>
-              <th className="text-right pb-2 pr-3">Exit</th>
-              <th className="text-right pb-2 pr-3">PnL</th>
-              <th className="text-right pb-2 pr-3">Duration</th>
-              <th className="text-left pb-2 pr-3">Reason</th>
-              <th className="text-left pb-2 pr-3">Strategy</th>
-              <th className="text-right pb-2">Closed</th>
+            <tr className="text-text-muted text-[11px] uppercase tracking-wider border-b border-border">
+              <th className="w-6 py-2.5 px-3" />
+              <th className="text-left py-2.5 px-2">Symbol</th>
+              <th className="text-left py-2.5 px-2">Direction</th>
+              <th className="text-right py-2.5 px-2">Entry</th>
+              <th className="text-right py-2.5 px-2">Exit</th>
+              <th className="text-right py-2.5 px-2">PnL</th>
+              <th className="text-right py-2.5 px-2">Duration</th>
+              <th className="text-left py-2.5 px-2">Reason</th>
+              <th className="text-left py-2.5 px-2">Strategy</th>
+              <th className="text-right py-2.5 px-3">Closed</th>
             </tr>
           </thead>
           <tbody>
@@ -120,39 +190,43 @@ function ClosedTab() {
                 ? (parseTimestamp(p.closed_at).getTime() - parseTimestamp(p.opened_at).getTime()) / 60000
                 : 0;
               return (
-                <tr key={p.id} className="border-b border-border/50 hover:bg-bg-card-hover">
-                  <td className="py-2 pr-3 font-medium">{p.symbol}</td>
-                  <td className="py-2 pr-3"><DirectionBadge direction={p.direction} /></td>
-                  <td className="py-2 pr-3 text-right font-mono">{formatPrice(p.entry_price)}</td>
-                  <td className="py-2 pr-3 text-right font-mono">{p.exit_price ? formatPrice(p.exit_price) : "—"}</td>
-                  <td className="py-2 pr-3 text-right">{p.pnl !== null ? <PnlBadge value={p.pnl} /> : "—"}</td>
-                  <td className="py-2 pr-3 text-right text-text-muted">{durationMin > 0 ? formatDuration(durationMin) : "—"}</td>
-                  <td className="py-2 pr-3 text-text-muted text-xs">{p.close_reason ?? "—"}</td>
-                  <td className="py-2 pr-3 text-text-muted">{p.strategy}</td>
-                  <td className="py-2 text-right">{p.closed_at ? <TimeAgo date={p.closed_at} /> : "—"}</td>
-                </tr>
+                <>
+                  <tr
+                    key={p.id}
+                    className="border-b border-border/40 hover:bg-bg-card-hover cursor-pointer transition-colors"
+                    onClick={() => toggle(p.id)}
+                  >
+                    <td className="py-2.5 px-3 text-text-muted text-xs">{expanded.has(p.id) ? "▼" : "▶"}</td>
+                    <td className="py-2.5 px-2 font-semibold text-text-primary">{p.symbol}</td>
+                    <td className="py-2.5 px-2"><DirectionBadge direction={p.direction} /></td>
+                    <td className="py-2.5 px-2 text-right font-mono text-text-secondary">{formatPrice(p.entry_price)}</td>
+                    <td className="py-2.5 px-2 text-right font-mono text-text-secondary">{p.exit_price ? formatPrice(p.exit_price) : "—"}</td>
+                    <td className="py-2.5 px-2 text-right">{p.pnl !== null ? <PnlBadge value={p.pnl} /> : "—"}</td>
+                    <td className="py-2.5 px-2 text-right text-text-muted text-xs">{durationMin > 0 ? formatDuration(durationMin) : "—"}</td>
+                    <td className="py-2.5 px-2">
+                      {p.close_reason && <StatusBadge status={p.close_reason} />}
+                    </td>
+                    <td className="py-2.5 px-2 text-text-muted text-xs">{p.strategy}</td>
+                    <td className="py-2.5 px-3 text-right">{p.closed_at ? <TimeAgo date={p.closed_at} /> : "—"}</td>
+                  </tr>
+                  {expanded.has(p.id) && (
+                    <tr key={`${p.id}-detail`}>
+                      <td colSpan={10} className="p-3">
+                        <PositionDetail position={p} />
+                      </td>
+                    </tr>
+                  )}
+                </>
               );
             })}
           </tbody>
         </table>
       </div>
-      <div className="flex gap-2 mt-4 justify-center">
-        <button
-          onClick={() => setPage(Math.max(0, page - 1))}
-          disabled={page === 0}
-          className="px-3 py-1 rounded text-sm border border-border disabled:opacity-30 hover:bg-bg-card-hover"
-        >
-          Prev
-        </button>
-        <span className="px-3 py-1 text-sm text-text-muted">Page {page + 1}</span>
-        <button
-          onClick={() => setPage(page + 1)}
-          disabled={positions.length < limit}
-          className="px-3 py-1 rounded text-sm border border-border disabled:opacity-30 hover:bg-bg-card-hover"
-        >
-          Next
-        </button>
-      </div>
+      <Pagination
+        page={page}
+        totalPages={positions.length < limit && page === 0 ? 1 : page + 2}
+        onPageChange={setPage}
+      />
     </div>
   );
 }
@@ -162,27 +236,35 @@ export default function PositionsPage() {
 
   return (
     <div>
-      <h2 className="text-xl font-bold mb-4">Positions</h2>
-      <Card>
-        <div className="flex gap-4 mb-4 border-b border-border">
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="text-lg font-bold text-text-primary">Positions</h2>
+      </div>
+      <Card noPadding>
+        <div className="flex border-b border-border">
           <button
             onClick={() => setTab("open")}
-            className={`pb-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === "open" ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text-primary"
+            className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
+              tab === "open"
+                ? "border-accent text-accent"
+                : "border-transparent text-text-muted hover:text-text-primary"
             }`}
           >
             Open
           </button>
           <button
             onClick={() => setTab("closed")}
-            className={`pb-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === "closed" ? "border-accent text-accent" : "border-transparent text-text-muted hover:text-text-primary"
+            className={`px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
+              tab === "closed"
+                ? "border-accent text-accent"
+                : "border-transparent text-text-muted hover:text-text-primary"
             }`}
           >
             Closed
           </button>
         </div>
-        {tab === "open" ? <OpenTab /> : <ClosedTab />}
+        <div className="p-4">
+          {tab === "open" ? <OpenTab /> : <ClosedTab />}
+        </div>
       </Card>
     </div>
   );

@@ -89,11 +89,23 @@ class RiskManager:
         """Initialize from Hyperliquid (source of truth), then reconcile with DB.
 
         Flow:
+        0. Restore kill switch from DB (survives restarts)
         1. Fetch live balance + open positions from Hyperliquid
         2. Use live balance as baseline for peak
         3. Only use DB peak if it's from a consistent session (same ballpark)
         This handles: fresh wallets, wallet changes, manual web trades, crashes.
         """
+        # Step 0: Restore kill switch from DB
+        try:
+            ks = await self._db.get_state("kill_switch")
+            if ks == "1":
+                reason = await self._db.get_state("kill_reason") or "restored from DB"
+                self._kill_switch = True
+                self._kill_reason = reason
+                logger.warning("Kill switch RESTORED from DB: %s", reason)
+        except Exception:
+            logger.debug("Failed to restore kill switch from DB", exc_info=True)
+
         # Step 1: Live state from Hyperliquid
         await self.refresh()
 
@@ -124,7 +136,7 @@ class RiskManager:
     async def refresh(self) -> None:
         """Refresh balance and open positions from Hyperliquid."""
         try:
-            # Get account balance (accountValue from marginSummary)
+            # Get account balance (perp + spot USDC)
             balance = await self._client.get_account_balance()
             self._current_balance = balance
 
@@ -158,7 +170,7 @@ class RiskManager:
             self._update_daily(balance)
 
             # Check kill conditions
-            self._check_kill_switch()
+            await self._check_kill_switch()
             self._check_daily_pause()
 
             self._last_refresh = time.time()
@@ -421,18 +433,18 @@ class RiskManager:
 
     # ── Kill switch & daily pause (internal) ─────────────────
 
-    def _check_kill_switch(self) -> None:
+    async def _check_kill_switch(self) -> None:
         """Activate kill switch if hard limits are breached."""
         if self._kill_switch:
             return
 
         dd = self._drawdown_pct()
         if dd >= self._config.max_total_drawdown_pct:
-            self._trigger_kill(f"Total drawdown {dd:.2f}% >= {self._config.max_total_drawdown_pct}%")
+            await self._trigger_kill(f"Total drawdown {dd:.2f}% >= {self._config.max_total_drawdown_pct}%")
             return
 
         if self._current_balance < self._config.min_balance_usdc:
-            self._trigger_kill(
+            await self._trigger_kill(
                 f"Balance {self._current_balance:.2f} < min {self._config.min_balance_usdc}"
             )
             return
@@ -442,19 +454,29 @@ class RiskManager:
         stats = await self._db.get_trade_stats()
         consec = stats.get("consecutive_losses", 0)
         if consec >= 5 and not self._kill_switch:
-            self._trigger_kill(f"{consec} consecutive losses")
+            await self._trigger_kill(f"{consec} consecutive losses")
 
-    def _trigger_kill(self, reason: str) -> None:
+    async def _trigger_kill(self, reason: str) -> None:
         self._kill_switch = True
         self._kill_reason = reason
         logger.critical("KILL SWITCH ACTIVATED: %s", reason)
+        try:
+            await self._db.set_state("kill_switch", "1")
+            await self._db.set_state("kill_reason", reason)
+        except Exception:
+            logger.debug("Failed to persist kill switch to DB", exc_info=True)
 
-    def reset_kill_switch(self) -> None:
+    async def reset_kill_switch(self) -> None:
         """Manual reset (operator override)."""
         if self._kill_switch:
             logger.warning("Kill switch RESET manually (was: %s)", self._kill_reason)
         self._kill_switch = False
         self._kill_reason = ""
+        try:
+            await self._db.delete_state("kill_switch")
+            await self._db.delete_state("kill_reason")
+        except Exception:
+            logger.debug("Failed to delete kill switch from DB", exc_info=True)
 
     def _check_daily_pause(self) -> None:
         dd = self._daily_drawdown_pct()

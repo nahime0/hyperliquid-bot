@@ -91,39 +91,72 @@ export interface CycleSummary {
   daily_paused: number;
 }
 
-// bot_status.json shape
-export interface BotStatus {
-  updated_at: string;
-  cycle_count: number;
-  mode: "testnet" | "mainnet";
-  paper: boolean;
-  no_ai: boolean;
-  leverage: number;
-  margin_mode: string;
-  risk_metrics: RiskMetrics;
-  strategy_mode: string;
-  strategies: Record<string, unknown>;
+export interface AiDecision {
+  id: number;
+  timestamp: string;
+  snapshot_hash: string | null;
+  action: "BUY" | "SHORT" | "SELL" | "HOLD" | "CLOSE" | "SCALE_UP" | "ADJUST";
+  symbol: string;
+  confidence: number;
+  reasoning: string | null;
+  raw_response: string | null;
+  executed: number;
+  execution_result: string | null;
+  tier: string | null;
+  cost_usd: number | null;
 }
 
-export interface RiskMetrics {
-  current_balance: number;
+export interface Order {
+  id: number;
+  order_id: string;
+  timestamp: string;
+  symbol: string;
+  side: "BUY" | "SELL" | "SHORT" | "CLOSE";
+  order_type: string;
+  price: number | null;
+  quantity: number;
+  status: "NEW" | "PARTIALLY_FILLED" | "FILLED" | "CANCELED";
+  strategy: string | null;
+  filled_price: number | null;
+  filled_quantity: number | null;
+  updated_at: string | null;
+}
+
+export interface DeferredOpportunity {
+  id: number;
+  symbol: string;
+  original_action: string;
+  deferred_at_cycle: number;
+  conditions: string | null;
+  type: "opportunity" | "hold";
+  created_at: string;
+}
+
+// Dashboard status — sourced from DB (cycle_summaries + balance_snapshots + bot_state)
+export interface DashboardStatus {
+  // Latest cycle_summary
+  cycle: number;
+  timestamp: string;
+  duration_sec: number | null;
+  balance_usdc: number;
   peak_balance: number;
   drawdown_pct: number;
   daily_drawdown_pct: number;
   open_positions: number;
-  max_open_positions: number;
-  kill_switch: boolean;
-  kill_reason: string;
-  daily_paused: boolean;
-  daily_pause_reason: string;
-  max_trade_pct: number;
-  stop_loss_pct: number;
-  take_profit_pct: number;
-  min_balance_usdc: number;
   capital_utilization: number;
-  total_margin_used: number;
-  available_margin: number;
-  target_utilization: number;
+  kill_switch: boolean;
+  daily_paused: boolean;
+  coins_monitored: number;
+  signals_generated: number;
+  decisions_approved: number;
+  decisions_blocked: number;
+  trades_executed: number;
+  // Extra fields from bot_state
+  mode: string | null;
+  paper: boolean | null;
+  no_ai: boolean | null;
+  strategy_mode: string | null;
+  leverage: number | null;
 }
 
 export interface TradeStats {
@@ -134,3 +167,10 @@ export interface TradeStats {
   total_pnl: number;
   profit_factor: number;
 }
+
+export type AggregateStats = TradeStats & {
+  total_pnl_all: number;
+  current_balance: number;
+  peak_balance: number;
+  open_position_count: number;
+};

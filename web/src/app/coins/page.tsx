@@ -1,90 +1,87 @@
 "use client";
 
+import { useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
-import { useStatus } from "@/hooks/useStatus";
 import type { Coin } from "@/lib/types";
 import { TimeAgo } from "@/components/shared/TimeAgo";
+import { Skeleton } from "@/components/shared/Card";
+import { EmptyState } from "@/components/shared/EmptyState";
+import { formatPrice } from "@/lib/format";
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
-function getSignalData(status: ReturnType<typeof useStatus>["status"], symbol: string) {
-  if (!status?.strategies) return null;
-  const strats = status.strategies as Record<string, unknown>;
-  const subs = strats.sub_strategies as Record<string, { signals?: Record<string, Record<string, unknown>> }> | undefined;
-  if (subs) {
-    for (const sub of Object.values(subs)) {
-      if (sub.signals?.[symbol]) return sub.signals[symbol];
-    }
-  }
-  const signals = strats.signals as Record<string, Record<string, unknown>> | undefined;
-  if (signals?.[symbol]) return signals[symbol];
-  return null;
-}
-
 export default function CoinsPage() {
-  const { data: coins } = useSWR<Coin[]>("/api/coins", fetcher, { refreshInterval: 30000 });
-  const { status } = useStatus();
+  const [showAll, setShowAll] = useState(false);
+  const { data: coins, isLoading } = useSWR<Coin[]>(
+    `/api/coins${showAll ? "?all=true" : ""}`,
+    fetcher,
+    { refreshInterval: 30000 }
+  );
+
+  const activeCount = coins?.filter(c => c.is_active).length ?? 0;
+  const inactiveCount = (coins?.length ?? 0) - activeCount;
 
   return (
     <div>
-      <h2 className="text-xl font-bold mb-4">Coins ({coins?.length ?? 0})</h2>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-        {coins?.map((coin) => {
-          const sig = getSignalData(status, coin.symbol);
-          const price = sig?.price as number | undefined;
-          const rsi = sig?.rsi as number | undefined;
-          const trend = sig?.trend as string | undefined;
-          const signal = sig?.signal as string | undefined;
-          const divergence = sig?.divergence as string | undefined;
+      <div className="flex items-center justify-between mb-5">
+        <div className="flex items-center gap-3">
+          <h2 className="text-lg font-bold text-text-primary">Coins</h2>
+          {coins && (
+            <span className="text-xs text-text-muted font-mono">
+              {activeCount} active{showAll ? ` / ${inactiveCount} inactive` : ""}
+            </span>
+          )}
+        </div>
+        <button
+          onClick={() => setShowAll(!showAll)}
+          className="text-xs text-text-muted hover:text-accent transition-colors"
+        >
+          {showAll ? "Show active only" : "Show all"}
+        </button>
+      </div>
 
-          const hasSignal = (signal && signal !== "NEUTRAL") || (divergence && divergence !== "NONE");
-
-          return (
+      {isLoading ? (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+          {Array.from({ length: 10 }).map((_, i) => (
+            <Skeleton key={i} className="w-full h-28 rounded-xl" />
+          ))}
+        </div>
+      ) : !coins || coins.length === 0 ? (
+        <EmptyState title="No coins found" description="Coins will appear here as the bot discovers them" />
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
+          {coins.map((coin) => (
             <Link
               key={coin.symbol}
               href={`/coins/${coin.symbol}`}
-              className="bg-bg-card border border-border rounded-lg p-3 hover:bg-bg-card-hover hover:border-accent/30 transition-colors"
+              className="bg-bg-card border border-border rounded-xl p-4 hover:bg-bg-card-hover hover:border-accent/30 transition-all group"
             >
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-bold text-sm">{coin.symbol}</span>
-                {hasSignal && (
-                  <span className="w-2 h-2 rounded-full bg-accent animate-pulse" />
+              <div className="flex items-center justify-between mb-3">
+                <span className="font-bold text-sm text-text-primary group-hover:text-accent transition-colors">
+                  {coin.symbol}
+                </span>
+                <span className={`w-2.5 h-2.5 rounded-full ${coin.is_active ? "bg-profit pulse-dot" : "bg-text-muted/40"}`} />
+              </div>
+              <div className="space-y-1.5">
+                {coin.avg_volume_24h > 0 && (
+                  <div className="text-xs text-text-muted">
+                    Vol 24h: <span className="text-text-secondary font-mono">${formatPrice(coin.avg_volume_24h)}</span>
+                  </div>
+                )}
+                {coin.sz_decimals !== null && (
+                  <div className="text-xs text-text-muted">
+                    Size dec: <span className="text-text-secondary">{coin.sz_decimals}</span>
+                  </div>
                 )}
               </div>
-              <div className="text-lg font-mono font-bold mb-1">
-                {price ? price.toLocaleString("en-US", { maximumFractionDigits: price >= 1 ? 2 : 6 }) : "—"}
-              </div>
-              <div className="flex items-center gap-2 text-xs">
-                {rsi !== undefined && (
-                  <span className={`${rsi < 30 ? "text-profit" : rsi > 70 ? "text-loss" : "text-text-muted"}`}>
-                    RSI {rsi.toFixed(0)}
-                  </span>
-                )}
-                {trend && (
-                  <span className={`${
-                    trend === "BULLISH" ? "text-profit" : trend === "BEARISH" ? "text-loss" : "text-text-muted"
-                  }`}>
-                    {trend}
-                  </span>
-                )}
-              </div>
-              {divergence && divergence !== "NONE" && (
-                <div className="mt-1">
-                  <span className={`text-xs px-1.5 py-0.5 rounded ${
-                    divergence.includes("BULLISH") ? "bg-profit/15 text-profit" : "bg-loss/15 text-loss"
-                  }`}>
-                    {divergence}
-                  </span>
-                </div>
-              )}
-              <div className="mt-2 text-xs text-text-muted">
-                <TimeAgo date={coin.last_seen} />
+              <div className="mt-3 pt-2 border-t border-border/50">
+                <TimeAgo date={coin.last_seen} className="text-[10px]" />
               </div>
             </Link>
-          );
-        })}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

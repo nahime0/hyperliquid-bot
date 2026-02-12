@@ -1,16 +1,24 @@
 @import "tailwindcss";
 
 @theme inline {
-  --color-bg-primary: #0d1117;
-  --color-bg-card: #161b22;
-  --color-bg-card-hover: #1c2129;
-  --color-border: #30363d;
-  --color-text-primary: #e6edf3;
-  --color-text-muted: #8b949e;
-  --color-profit: #3fb950;
-  --color-loss: #f85149;
-  --color-accent: #58a6ff;
-  --color-warning: #d29922;
+  --color-bg-primary: #0a0e14;
+  --color-bg-secondary: #0f1419;
+  --color-bg-card: #141a22;
+  --color-bg-card-hover: #1a2230;
+  --color-bg-elevated: #1c2433;
+  --color-border: #1e2a3a;
+  --color-border-light: #293547;
+  --color-text-primary: #e2e8f0;
+  --color-text-secondary: #94a3b8;
+  --color-text-muted: #64748b;
+  --color-profit: #22c55e;
+  --color-profit-dim: #16a34a;
+  --color-loss: #ef4444;
+  --color-loss-dim: #dc2626;
+  --color-accent: #3b82f6;
+  --color-accent-hover: #60a5fa;
+  --color-warning: #f59e0b;
+  --color-purple: #a78bfa;
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -23,13 +31,49 @@ body {
 
 /* Scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: var(--color-bg-primary);
+  background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--color-border);
+  background: var(--color-border-light);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* Custom select styling */
+select {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%2364748b' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+  background-position: right 0.5rem center;
+  background-repeat: no-repeat;
+  background-size: 1.5em 1.5em;
+  padding-right: 2.5rem;
+}
+
+/* Skeleton loading animation */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.skeleton {
+  background: linear-gradient(90deg, var(--color-bg-card) 25%, var(--color-bg-elevated) 50%, var(--color-bg-card) 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
   border-radius: 4px;
+}
+
+/* Pulse for live indicator */
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
 }

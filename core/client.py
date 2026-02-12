@@ -209,13 +209,36 @@ class HyperliquidClient:
         )
 
     async def get_account_balance(self) -> float:
-        """Get total account value from Hyperliquid perp marginSummary.
+        """Get total equity from Hyperliquid unified account.
 
-        accountValue = idle USDC + margin in use + unrealized PnL.
-        This is the single source of truth for the account equity.
+        On unified accounts, spot USDC `total` includes margin held for perp.
+        Perp `accountValue` = that same margin + unrealized PnL.
+        To avoid double-counting: (spot_total - spot_hold) + perp_accountValue.
         """
-        state = await self.get_user_state()
-        return float(state.get("marginSummary", {}).get("accountValue", 0))
+        perp_value = 0.0
+        try:
+            state = await self.get_user_state()
+            perp_value = float(state.get("crossMarginSummary", {}).get("accountValue", 0))
+            if perp_value == 0:
+                perp_value = float(state.get("marginSummary", {}).get("accountValue", 0))
+        except Exception:
+            logger.warning("get_user_state() failed")
+
+        spot_free = 0.0
+        try:
+            spot_state = await self.get_spot_state()
+            for b in spot_state.get("balances", []):
+                if b.get("coin") == "USDC":
+                    total = float(b.get("total", 0))
+                    hold = float(b.get("hold", 0))
+                    spot_free = total - hold
+                    break
+        except Exception:
+            logger.warning("get_spot_state() failed")
+
+        equity = spot_free + perp_value
+        logger.debug("Balance: spot_free=%.2f perp=%.2f equity=%.2f", spot_free, perp_value, equity)
+        return equity
 
     async def get_open_positions(self) -> list[dict[str, Any]]:
         """Get open perpetual positions with size, entry, PnL, liquidation.

@@ -225,31 +225,31 @@ class TestValidation:
 
 
 class TestKillSwitch:
-    def test_kill_switch_on_drawdown(self, risk_config):
+    @pytest.mark.asyncio
+    async def test_kill_switch_on_drawdown(self, db, risk_config):
         client = MockClient(balance=800)
-        db_mock = MagicMock()
-        rm = RiskManager(risk_config, client, db_mock)
+        rm = RiskManager(risk_config, client, db)
         rm._peak_balance = 1000.0
         rm._current_balance = 800.0  # 20% drawdown > 15% max
-        rm._check_kill_switch()
+        await rm._check_kill_switch()
         assert rm._kill_switch is True
 
-    def test_kill_switch_on_low_balance(self, risk_config):
+    @pytest.mark.asyncio
+    async def test_kill_switch_on_low_balance(self, db, risk_config):
         client = MockClient(balance=30)
-        db_mock = MagicMock()
-        rm = RiskManager(risk_config, client, db_mock)
+        rm = RiskManager(risk_config, client, db)
         rm._peak_balance = 1000.0
         rm._current_balance = 30.0  # below min 50
-        rm._check_kill_switch()
+        await rm._check_kill_switch()
         assert rm._kill_switch is True
 
-    def test_no_kill_switch_within_limits(self, risk_config):
+    @pytest.mark.asyncio
+    async def test_no_kill_switch_within_limits(self, db, risk_config):
         client = MockClient(balance=900)
-        db_mock = MagicMock()
-        rm = RiskManager(risk_config, client, db_mock)
+        rm = RiskManager(risk_config, client, db)
         rm._peak_balance = 1000.0
         rm._current_balance = 900.0  # 10% drawdown < 15%
-        rm._check_kill_switch()
+        await rm._check_kill_switch()
         assert rm._kill_switch is False
 
     @pytest.mark.asyncio
@@ -276,6 +276,66 @@ class TestKillSwitch:
         rm._current_balance = 940.0  # 6% daily drawdown > 5%
         rm._check_daily_pause()
         assert rm._daily_paused is True
+
+
+# ── Kill switch persistence ───────────────────────────────
+
+
+class TestKillSwitchPersistence:
+    @pytest.mark.asyncio
+    async def test_kill_switch_persists_to_db(self, db, risk_config):
+        client = MockClient(balance=800)
+        rm = RiskManager(risk_config, client, db)
+        rm._peak_balance = 1000.0
+        rm._current_balance = 800.0
+        await rm._check_kill_switch()
+        assert rm._kill_switch is True
+
+        # Verify it's in DB
+        ks = await db.get_state("kill_switch")
+        assert ks == "1"
+        reason = await db.get_state("kill_reason")
+        assert "drawdown" in reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_kill_switch_restored_on_start(self, db, risk_config):
+        # Simulate previous session that set kill switch
+        await db.set_state("kill_switch", "1")
+        await db.set_state("kill_reason", "test: 5 consecutive losses")
+
+        client = MockClient(balance=1000)
+        rm = RiskManager(risk_config, client, db)
+        await rm.start()
+
+        assert rm._kill_switch is True
+        assert "5 consecutive losses" in rm._kill_reason
+
+    @pytest.mark.asyncio
+    async def test_reset_kill_switch_clears_db(self, db, risk_config):
+        client = MockClient(balance=800)
+        rm = RiskManager(risk_config, client, db)
+        rm._peak_balance = 1000.0
+        rm._current_balance = 800.0
+        await rm._check_kill_switch()
+        assert rm._kill_switch is True
+
+        await rm.reset_kill_switch()
+        assert rm._kill_switch is False
+
+        ks = await db.get_state("kill_switch")
+        assert ks is None
+
+    @pytest.mark.asyncio
+    async def test_no_kill_switch_in_db_when_not_triggered(self, db, risk_config):
+        client = MockClient(balance=950)
+        rm = RiskManager(risk_config, client, db)
+        rm._peak_balance = 1000.0
+        rm._current_balance = 950.0
+        await rm._check_kill_switch()
+        assert rm._kill_switch is False
+
+        ks = await db.get_state("kill_switch")
+        assert ks is None
 
 
 # ── Dynamic max positions ───────────────────────────────────

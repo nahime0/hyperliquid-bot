@@ -1,22 +1,37 @@
 const COLORS: Record<string, string> = {
-  SIGNAL: "bg-accent/15 text-accent",
-  AI_REVIEW: "bg-purple-500/15 text-purple-400",
-  DEFERRED: "bg-warning/15 text-warning",
-  RISK_APPROVED: "bg-profit/15 text-profit",
-  RISK_BLOCKED: "bg-loss/15 text-loss",
-  TRADE_ENTRY: "bg-profit/15 text-profit",
-  TRADE_EXIT: "bg-loss/15 text-loss",
-  POSITION_SCALED: "bg-accent/15 text-accent",
-  TRAILING_UPDATE: "bg-warning/15 text-warning",
-  SL_TP_TRIGGER: "bg-loss/15 text-loss",
-  POSITION_ADJUSTED: "bg-purple-500/15 text-purple-400",
+  SIGNAL: "bg-accent/10 text-accent border-accent/20",
+  AI_REVIEW: "bg-purple/10 text-purple border-purple/20",
+  DEFERRED: "bg-warning/10 text-warning border-warning/20",
+  RISK_APPROVED: "bg-profit/10 text-profit border-profit/20",
+  RISK_BLOCKED: "bg-loss/10 text-loss border-loss/20",
+  TRADE_ENTRY: "bg-profit/10 text-profit border-profit/20",
+  TRADE_EXIT: "bg-loss/10 text-loss border-loss/20",
+  POSITION_SCALED: "bg-accent/10 text-accent border-accent/20",
+  TRAILING_UPDATE: "bg-warning/10 text-warning border-warning/20",
+  SL_TP_TRIGGER: "bg-loss/10 text-loss border-loss/20",
+  POSITION_ADJUSTED: "bg-purple/10 text-purple border-purple/20",
+};
+
+const LABELS: Record<string, string> = {
+  SIGNAL: "Signal",
+  AI_REVIEW: "AI Review",
+  DEFERRED: "Deferred",
+  RISK_APPROVED: "Approved",
+  RISK_BLOCKED: "Blocked",
+  TRADE_ENTRY: "Entry",
+  TRADE_EXIT: "Exit",
+  POSITION_SCALED: "Scale Up",
+  TRAILING_UPDATE: "Trail Update",
+  SL_TP_TRIGGER: "SL/TP Hit",
+  POSITION_ADJUSTED: "Adjusted",
 };
 
 export function EventTypeBadge({ type }: { type: string }) {
-  const color = COLORS[type] ?? "bg-text-muted/15 text-text-muted";
+  const color = COLORS[type] ?? "bg-text-muted/10 text-text-muted border-text-muted/20";
+  const label = LABELS[type] ?? type;
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${color}`}>
-      {type}
+    <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border ${color}`}>
+      {label}
     </span>
   );
 }

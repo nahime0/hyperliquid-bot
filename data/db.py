@@ -139,6 +139,23 @@ CREATE TABLE IF NOT EXISTS cycle_summaries (
 
 CREATE INDEX IF NOT EXISTS idx_cycle_summaries_cycle ON cycle_summaries(cycle);
 CREATE INDEX IF NOT EXISTS idx_cycle_summaries_timestamp ON cycle_summaries(timestamp);
+
+CREATE TABLE IF NOT EXISTS deferred_opportunities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    original_action TEXT NOT NULL,
+    deferred_at_cycle INTEGER NOT NULL,
+    conditions TEXT NOT NULL DEFAULT '{}',
+    type TEXT NOT NULL DEFAULT 'opportunity',
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    UNIQUE(symbol, type)
+);
+
+CREATE TABLE IF NOT EXISTS bot_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
 """
 
 _MIGRATIONS = [
@@ -437,6 +454,80 @@ class Database:
         )
         await self.db.commit()
         return cursor.lastrowid  # type: ignore[return-value]
+
+    # ── Stats helpers ───────────────────────────────────────
+
+    # ── Deferred Opportunities ────────────────────────────────
+
+    async def upsert_deferred(
+        self,
+        symbol: str,
+        action: str,
+        cycle: int,
+        conditions: dict[str, Any] | None = None,
+        type_: str = "opportunity",
+    ) -> None:
+        await self.db.execute(
+            """INSERT INTO deferred_opportunities (symbol, original_action, deferred_at_cycle, conditions, type)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(symbol, type) DO UPDATE SET
+                   original_action = excluded.original_action,
+                   deferred_at_cycle = excluded.deferred_at_cycle,
+                   conditions = excluded.conditions,
+                   created_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')""",
+            (symbol, action, cycle, json.dumps(conditions or {}), type_),
+        )
+        await self.db.commit()
+
+    async def delete_deferred(self, symbol: str, type_: str = "opportunity") -> None:
+        await self.db.execute(
+            "DELETE FROM deferred_opportunities WHERE symbol = ? AND type = ?",
+            (symbol, type_),
+        )
+        await self.db.commit()
+
+    async def get_all_deferred(self, type_: str | None = None) -> list[dict[str, Any]]:
+        if type_:
+            cursor = await self.db.execute(
+                "SELECT * FROM deferred_opportunities WHERE type = ? ORDER BY id",
+                (type_,),
+            )
+        else:
+            cursor = await self.db.execute(
+                "SELECT * FROM deferred_opportunities ORDER BY id"
+            )
+        rows = await cursor.fetchall()
+        result = []
+        for r in rows:
+            d = dict(r)
+            d["conditions"] = json.loads(d["conditions"])
+            result.append(d)
+        return result
+
+    # ── Bot State (key-value) ─────────────────────────────────
+
+    async def set_state(self, key: str, value: str) -> None:
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        await self.db.execute(
+            """INSERT INTO bot_state (key, value, updated_at)
+               VALUES (?, ?, ?)
+               ON CONFLICT(key) DO UPDATE SET
+                   value = excluded.value,
+                   updated_at = excluded.updated_at""",
+            (key, value, now),
+        )
+        await self.db.commit()
+
+    async def get_state(self, key: str) -> str | None:
+        cursor = await self.db.execute(
+            "SELECT value FROM bot_state WHERE key = ?", (key,)
+        )
+        row = await cursor.fetchone()
+        return row["value"] if row else None
+
+    async def delete_state(self, key: str) -> None:
+        await self.db.execute("DELETE FROM bot_state WHERE key = ?", (key,))
+        await self.db.commit()
 
     # ── Stats helpers ───────────────────────────────────────
 

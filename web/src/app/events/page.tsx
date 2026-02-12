@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import { useEvents } from "@/hooks/useEvents";
-import { Card } from "@/components/shared/Card";
+import { Card, Skeleton } from "@/components/shared/Card";
 import { EventTypeBadge } from "@/components/shared/EventTypeBadge";
 import { TimeAgo } from "@/components/shared/TimeAgo";
+import { EmptyState } from "@/components/shared/EmptyState";
+import { Pagination } from "@/components/shared/Pagination";
 
 const EVENT_TYPES = [
   "SIGNAL", "AI_REVIEW", "DEFERRED", "RISK_APPROVED", "RISK_BLOCKED",
@@ -12,13 +14,22 @@ const EVENT_TYPES = [
   "SL_TP_TRIGGER", "POSITION_ADJUSTED",
 ] as const;
 
+function parseDetails(details: string): Record<string, unknown> | null {
+  if (!details || details === "{}") return null;
+  try {
+    return JSON.parse(details);
+  } catch {
+    return null;
+  }
+}
+
 export default function EventsPage() {
   const [eventType, setEventType] = useState("");
   const [symbol, setSymbol] = useState("");
   const [page, setPage] = useState(0);
   const limit = 50;
 
-  const { events, total } = useEvents({
+  const { events, total, isLoading } = useEvents({
     limit,
     offset: page * limit,
     event_type: eventType || undefined,
@@ -30,26 +41,30 @@ export default function EventsPage() {
   const toggleExpand = (id: number) => {
     setExpanded((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      next.has(id) ? next.delete(id) : next.add(id);
       return next;
     });
   };
 
+  const totalPages = Math.max(1, Math.ceil(total / limit));
+
   return (
     <div>
-      <h2 className="text-xl font-bold mb-4">Events</h2>
+      <div className="flex items-center justify-between mb-5">
+        <h2 className="text-lg font-bold text-text-primary">Events</h2>
+        <span className="text-xs text-text-muted font-mono">{total.toLocaleString()} total</span>
+      </div>
 
       {/* Filters */}
-      <div className="flex flex-wrap gap-3 mb-4">
+      <div className="flex flex-wrap gap-3 mb-5">
         <select
           value={eventType}
           onChange={(e) => { setEventType(e.target.value); setPage(0); }}
-          className="bg-bg-card border border-border rounded px-3 py-1.5 text-sm text-text-primary"
+          className="bg-bg-card border border-border rounded-lg px-3 py-2 text-sm text-text-primary focus:outline-none focus:border-accent/50"
         >
           <option value="">All types</option>
           {EVENT_TYPES.map((t) => (
-            <option key={t} value={t}>{t}</option>
+            <option key={t} value={t}>{t.replace(/_/g, " ")}</option>
           ))}
         </select>
         <input
@@ -57,74 +72,95 @@ export default function EventsPage() {
           placeholder="Filter by symbol..."
           value={symbol}
           onChange={(e) => { setSymbol(e.target.value.toUpperCase()); setPage(0); }}
-          className="bg-bg-card border border-border rounded px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted w-40"
+          className="bg-bg-card border border-border rounded-lg px-3 py-2 text-sm text-text-primary placeholder:text-text-muted w-44 focus:outline-none focus:border-accent/50"
         />
-        <span className="text-text-muted text-sm self-center">{total} events</span>
+        {(eventType || symbol) && (
+          <button
+            onClick={() => { setEventType(""); setSymbol(""); setPage(0); }}
+            className="text-xs text-text-muted hover:text-accent transition-colors"
+          >
+            Clear filters
+          </button>
+        )}
       </div>
 
-      <Card>
-        {events.length === 0 ? (
-          <p className="text-text-muted text-sm py-4 text-center">No events match filters</p>
-        ) : (
-          <div className="space-y-0">
-            {events.map((e) => (
-              <div key={e.id}>
-                <div
-                  className="flex items-center gap-3 py-2 px-1 border-b border-border/30 hover:bg-bg-card-hover cursor-pointer"
-                  onClick={() => toggleExpand(e.id)}
-                >
-                  <span className="text-text-muted text-xs font-mono w-10">#{e.cycle}</span>
-                  <EventTypeBadge type={e.event_type} />
-                  <span className="font-medium text-sm w-16">{e.symbol}</span>
-                  {e.action && <span className="text-xs text-accent">{e.action}</span>}
-                  {e.confidence !== null && (
-                    <span className="text-xs text-text-muted">conf {(e.confidence * 100).toFixed(0)}%</span>
-                  )}
-                  <span className="ml-auto"><TimeAgo date={e.timestamp} /></span>
-                  <span className="text-text-muted text-xs">{expanded.has(e.id) ? "▼" : "▶"}</span>
-                </div>
-                {expanded.has(e.id) && (
-                  <div className="pl-12 pr-4 py-2 bg-bg-primary/50 text-xs space-y-1 border-b border-border/30">
-                    {e.reasoning && (
-                      <p><span className="text-text-muted">Reasoning:</span> {e.reasoning}</p>
-                    )}
-                    {e.details && e.details !== "{}" && (
-                      <pre className="text-text-muted overflow-x-auto">
-                        {JSON.stringify(JSON.parse(e.details), null, 2)}
-                      </pre>
-                    )}
-                    <p className="text-text-muted">
-                      Source: {e.source}
-                      {e.position_id && ` | Position #${e.position_id}`}
-                      {e.trade_id && ` | Trade #${e.trade_id}`}
-                    </p>
-                  </div>
-                )}
-              </div>
-            ))}
+      <Card noPadding>
+        {isLoading && page === 0 ? (
+          <div className="p-5"><Skeleton className="w-full h-60" /></div>
+        ) : events.length === 0 ? (
+          <div className="p-5">
+            <EmptyState title="No events match filters" description="Try adjusting the filters or wait for new events" />
           </div>
-        )}
+        ) : (
+          <>
+            <div className="divide-y divide-border/30">
+              {events.map((e) => {
+                const details = parseDetails(e.details);
+                const isExpanded = expanded.has(e.id);
 
-        {/* Pagination */}
-        <div className="flex gap-2 mt-4 justify-center">
-          <button
-            onClick={() => setPage(Math.max(0, page - 1))}
-            disabled={page === 0}
-            className="px-3 py-1 rounded text-sm border border-border disabled:opacity-30 hover:bg-bg-card-hover"
-          >
-            Prev
-          </button>
-          <span className="px-3 py-1 text-sm text-text-muted">
-            Page {page + 1} of {Math.ceil(total / limit) || 1}
-          </span>
-          <button
-            onClick={() => setPage(page + 1)}
-            disabled={(page + 1) * limit >= total}
-            className="px-3 py-1 rounded text-sm border border-border disabled:opacity-30 hover:bg-bg-card-hover"
-          >
-            Next
-          </button>
-        </div>
+                return (
+                  <div key={e.id}>
+                    <div
+                      className="flex items-center gap-3 py-3 px-4 hover:bg-bg-card-hover cursor-pointer transition-colors"
+                      onClick={() => toggleExpand(e.id)}
+                    >
+                      <span className="text-text-muted text-xs font-mono w-12 text-right shrink-0">
+                        #{e.cycle}
+                      </span>
+                      <EventTypeBadge type={e.event_type} />
+                      <span className="font-semibold text-sm text-text-primary w-16 shrink-0">{e.symbol}</span>
+                      {e.action && (
+                        <span className="text-xs font-medium text-accent bg-accent/5 px-1.5 py-0.5 rounded">
+                          {e.action}
+                        </span>
+                      )}
+                      {e.confidence !== null && (
+                        <span className="text-xs text-text-muted font-mono">
+                          {(e.confidence * 100).toFixed(0)}%
+                        </span>
+                      )}
+                      {e.reasoning && (
+                        <span className="text-xs text-text-muted truncate max-w-xs hidden lg:inline">
+                          {e.reasoning}
+                        </span>
+                      )}
+                      <span className="ml-auto shrink-0"><TimeAgo date={e.timestamp} /></span>
+                      <span className="text-text-muted text-xs shrink-0 w-4">
+                        {isExpanded ? "▼" : "▶"}
+                      </span>
+                    </div>
+                    {isExpanded && (
+                      <div className="px-4 pb-4 pt-1 ml-12 space-y-2">
+                        {e.reasoning && (
+                          <div className="bg-bg-secondary rounded-lg p-3 border border-border-light">
+                            <span className="text-[11px] text-text-muted uppercase tracking-wide block mb-1">Reasoning</span>
+                            <p className="text-xs text-text-secondary leading-relaxed">{e.reasoning}</p>
+                          </div>
+                        )}
+                        {details && (
+                          <div className="bg-bg-secondary rounded-lg p-3 border border-border-light">
+                            <span className="text-[11px] text-text-muted uppercase tracking-wide block mb-1">Details</span>
+                            <pre className="text-xs text-text-muted font-mono overflow-x-auto leading-relaxed">
+                              {JSON.stringify(details, null, 2)}
+                            </pre>
+                          </div>
+                        )}
+                        <div className="flex gap-4 text-xs text-text-muted">
+                          <span>Source: <span className="text-text-secondary">{e.source}</span></span>
+                          {e.position_id && <span>Position: <span className="text-accent">#{e.position_id}</span></span>}
+                          {e.trade_id && <span>Trade: <span className="text-accent">#{e.trade_id}</span></span>}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="px-4 pb-2">
+              <Pagination page={page} totalPages={totalPages} onPageChange={setPage} />
+            </div>
+          </>
+        )}
       </Card>
     </div>
   );

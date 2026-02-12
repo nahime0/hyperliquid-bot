@@ -81,7 +81,7 @@ class Bot:
         self._client = HyperliquidClient(settings)
         self._db = Database(settings.db_path)
         self._market_data = MarketData(self._client, settings)
-        self._advisor = AIAdvisor(model=settings.ai.model, timeout=settings.ai.timeout)
+        self._advisor = AIAdvisor(model=settings.ai.model, timeout=settings.ai.timeout, db=self._db)
         self._positions = PositionTracker(self._db, settings.risk)
         self._risk = RiskManager(settings.risk, self._client, self._db, self._positions, market_config=settings.market)
 
@@ -132,6 +132,9 @@ class Bot:
 
         # Shutdown event
         self._shutdown_event = asyncio.Event()
+
+        # Lock to prevent concurrent close operations (SL/TP monitor vs tick)
+        self._close_lock = asyncio.Lock()
 
         # Active coins (populated dynamically after connect)
         self._active_coins: list[str] = ALL_COINS
@@ -211,6 +214,7 @@ class Bot:
 
         # AI advisor (for review mode)
         if not self._no_ai:
+            await self._advisor.load_deferred()
             logger.info("AI advisor enabled (model=%s, timeout=%ds)", self._settings.ai.model, self._settings.ai.timeout)
 
         self._running = True
@@ -267,28 +271,38 @@ class Bot:
         except asyncio.TimeoutError:
             pass
 
-        while self._running:
-            cycle_start = time.monotonic()
-            self._cycle_count += 1
+        # Launch independent SL/TP monitor
+        monitor_task = asyncio.create_task(self._sl_tp_monitor())
 
-            try:
-                await self._tick()
-            except Exception:
-                logger.exception("Error in main loop cycle #%d", self._cycle_count)
+        try:
+            while self._running:
+                cycle_start = time.monotonic()
+                self._cycle_count += 1
 
-            if self._once:
-                logger.info("--once flag: exiting after single cycle")
-                break
-
-            elapsed = time.monotonic() - cycle_start
-            sleep_time = interval  # wait full interval after tick completes (incl. AI)
-            if sleep_time > 0:
-                logger.debug("Cycle #%d took %.1fs — sleeping %.0fs", self._cycle_count, elapsed, sleep_time)
                 try:
-                    await asyncio.wait_for(self._shutdown_event.wait(), timeout=sleep_time)
+                    await self._tick()
+                except Exception:
+                    logger.exception("Error in main loop cycle #%d", self._cycle_count)
+
+                if self._once:
+                    logger.info("--once flag: exiting after single cycle")
                     break
-                except asyncio.TimeoutError:
-                    pass
+
+                elapsed = time.monotonic() - cycle_start
+                sleep_time = interval  # wait full interval after tick completes (incl. AI)
+                if sleep_time > 0:
+                    logger.debug("Cycle #%d took %.1fs — sleeping %.0fs", self._cycle_count, elapsed, sleep_time)
+                    try:
+                        await asyncio.wait_for(self._shutdown_event.wait(), timeout=sleep_time)
+                        break
+                    except asyncio.TimeoutError:
+                        pass
+        finally:
+            monitor_task.cancel()
+            try:
+                await monitor_task
+            except asyncio.CancelledError:
+                pass
 
     async def _tick(self) -> None:
         """One iteration of the main loop."""
@@ -313,11 +327,10 @@ class Bot:
 
         if metrics["kill_switch"]:
             logger.critical("Kill switch active: %s — skipping cycle", metrics["kill_reason"])
-            self._write_status(metrics)
+            await self._write_status(metrics)
             return
 
-        # 2. Check SL/TP on open positions
-        await self._check_positions()
+        # 2. (SL/TP check moved to independent _sl_tp_monitor task)
 
         # 3. Refresh funding rates periodically
         if self._cycle_count % FUNDING_REFRESH_INTERVAL == 1:
@@ -357,14 +370,14 @@ class Bot:
                 if sym not in candidate_syms
             ]
             for sym in stale:
-                self._advisor.remove_deferred(sym)
+                await self._advisor.remove_deferred(sym)
                 logger.info("Removed stale deferred %s — signal no longer present", sym)
 
             # Check which deferred have met their conditions
-            ready_symbols = self._advisor.check_deferred(mid_prices)
+            ready_symbols = await self._advisor.check_deferred(mid_prices)
             for sym in ready_symbols:
                 if sym not in candidate_syms:
-                    self._advisor.remove_deferred(sym)  # conditions met but signal gone
+                    await self._advisor.remove_deferred(sym)  # conditions met but signal gone
 
             # Filter out candidates for symbols still deferred
             deferred_syms = self._advisor.deferred_symbols
@@ -422,12 +435,12 @@ class Bot:
         positions_for_ai = open_positions
         if not self._no_ai:
             # Check if any deferred holds are ready for re-evaluation
-            ready_holds = self._advisor.check_deferred_holds(mid_prices)
+            ready_holds = await self._advisor.check_deferred_holds(mid_prices)
             # Also remove holds for positions that were closed
             open_syms = {p["symbol"] for p in open_positions}
             for sym in list(self._advisor.deferred_hold_symbols):
                 if sym not in open_syms:
-                    self._advisor.remove_deferred_hold(sym)
+                    await self._advisor.remove_deferred_hold(sym)
             # Filter out positions still deferred
             held_syms = self._advisor.deferred_hold_symbols
             if held_syms:
@@ -521,7 +534,7 @@ class Bot:
                 elif pa["action"] == "HOLD":
                     defer_cond = pa.get("defer")
                     if defer_cond:
-                        self._advisor.defer_hold(pa["symbol"], defer_cond)
+                        await self._advisor.defer_hold(pa["symbol"], defer_cond)
                 elif pa["action"] == "ADJUST":
                     pos = next((p for p in open_positions if p["symbol"] == pa["symbol"]), None)
                     if pos:
@@ -547,7 +560,7 @@ class Bot:
                     # Defer the opportunity
                     orig = next((d for d in candidates if d.symbol == oa["symbol"]), None)
                     original_action = orig.action if orig else "BUY"
-                    self._advisor.defer(oa["symbol"], original_action, oa.get("defer", {}))
+                    await self._advisor.defer(oa["symbol"], original_action, oa.get("defer", {}))
                     continue
 
                 # BUY or SHORT — find the original candidate and apply adjustments
@@ -610,7 +623,8 @@ class Bot:
             decision = validation.decision
             size = validation.size
 
-            pnl = await self._execute(decision, size)
+            async with self._close_lock:
+                pnl = await self._execute(decision, size)
             if pnl is not None or decision.action in ("BUY", "SHORT", "SCALE_UP"):
                 _trades_executed += 1
 
@@ -635,7 +649,7 @@ class Bot:
         await self._risk.check_consecutive_losses()
 
         # 11. Write live status for dashboard
-        self._write_status(metrics)
+        await self._write_status(metrics)
 
         # 12. Cycle summary
         try:
@@ -757,6 +771,24 @@ class Bot:
 
     # ── Position SL/TP monitoring ─────────────────────────────
 
+    async def _sl_tp_monitor(self) -> None:
+        """Independent SL/TP check every ~20 seconds."""
+        logger.info("SL/TP monitor started (interval: 20s)")
+        while self._running:
+            try:
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=20)
+                break  # shutdown signalled
+            except asyncio.TimeoutError:
+                pass
+            if self._risk._kill_switch:
+                continue
+            try:
+                async with self._close_lock:
+                    await self._check_positions()
+            except Exception:
+                logger.exception("SL/TP monitor error")
+        logger.info("SL/TP monitor stopped")
+
     async def _check_positions(self) -> None:
         """Check all open positions for SL/TP/trailing/time stop hits."""
         positions = await self._positions.get_open_positions()
@@ -843,8 +875,8 @@ class Bot:
 
     # ── Dashboard status ──────────────────────────────────────
 
-    def _write_status(self, metrics: dict[str, Any]) -> None:
-        """Write live bot state to JSON for the dashboard."""
+    async def _write_status(self, metrics: dict[str, Any]) -> None:
+        """Write live bot state to DB for the dashboard."""
         try:
             cfg = self._settings.hyperliquid
             status = {
@@ -859,11 +891,9 @@ class Bot:
                 "strategy_mode": self._strategy_mode,
                 "strategies": self._strategy.get_state(),
             }
-            Path("data/bot_status.json").write_text(
-                json.dumps(status, default=str)
-            )
+            await self._db.set_state("bot_status", json.dumps(status, default=str))
         except Exception:
-            logger.debug("Failed to write bot_status.json", exc_info=True)
+            logger.debug("Failed to write bot_status to DB", exc_info=True)
 
     # ── Indicator helpers ────────────────────────────────────
 
@@ -1282,6 +1312,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--paper", action="store_true", help="Paper trading (log decisions, no real orders)")
     parser.add_argument("--no-ai", action="store_true", help="Disable AI review, use pure rule-based trading")
     parser.add_argument("--once", action="store_true", help="Run one cycle then exit")
+    parser.add_argument("--reset-kill-switch", action="store_true", help="Reset persistent kill switch and exit")
     parser.add_argument(
         "--strategy",
         choices=["multi", "mean_reversion", "rsi_div"],
@@ -1295,6 +1326,21 @@ async def async_main() -> None:
     args = parse_args()
     settings = load_settings()
     setup_logging(settings.log_level)
+
+    # Reset kill switch utility
+    if args.reset_kill_switch:
+        db = Database(settings.db_path)
+        await db.connect()
+        ks = await db.get_state("kill_switch")
+        reason = await db.get_state("kill_reason")
+        if ks:
+            await db.delete_state("kill_switch")
+            await db.delete_state("kill_reason")
+            logger.info("Kill switch RESET (was: %s)", reason or "unknown")
+        else:
+            logger.info("Kill switch was not active")
+        await db.close()
+        return
 
     # Override testnet based on CLI flags
     if args.live:
