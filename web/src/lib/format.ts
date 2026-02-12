@@ -23,9 +23,19 @@ export function formatPnl(value: number): string {
   return `${sign}${formatUsd(value)}`;
 }
 
+export function parseTimestamp(isoString: string): Date {
+  // DB timestamps end with Z, bot_status uses +00:00 — both are valid ISO
+  // Only append Z if there's no timezone indicator at all
+  if (/[Zz]$/.test(isoString) || /[+-]\d{2}:\d{2}$/.test(isoString)) {
+    return new Date(isoString);
+  }
+  return new Date(isoString + "Z");
+}
+
 export function timeAgo(isoString: string): string {
   const now = Date.now();
-  const then = new Date(isoString.endsWith("Z") ? isoString : isoString + "Z").getTime();
+  const then = parseTimestamp(isoString).getTime();
+  if (isNaN(then)) return "—";
   const diff = now - then;
 
   if (diff < 0) return "just now";

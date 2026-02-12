@@ -7,7 +7,7 @@ import { Card } from "@/components/shared/Card";
 import { PnlBadge } from "@/components/shared/PnlBadge";
 import { DirectionBadge } from "@/components/shared/DirectionBadge";
 import { TimeAgo } from "@/components/shared/TimeAgo";
-import { formatPrice, formatPct, formatDuration } from "@/lib/format";
+import { formatPrice, formatPct, formatDuration, parseTimestamp } from "@/lib/format";
 
 function OpenTab() {
   const { positions } = useOpenPositions();
@@ -117,7 +117,7 @@ function ClosedTab() {
           <tbody>
             {positions.map((p) => {
               const durationMin = p.opened_at && p.closed_at
-                ? (new Date(p.closed_at + "Z").getTime() - new Date(p.opened_at + "Z").getTime()) / 60000
+                ? (parseTimestamp(p.closed_at).getTime() - parseTimestamp(p.opened_at).getTime()) / 60000
                 : 0;
               return (
                 <tr key={p.id} className="border-b border-border/50 hover:bg-bg-card-hover">

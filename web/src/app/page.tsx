@@ -9,7 +9,7 @@ import { Card } from "@/components/shared/Card";
 import { PnlBadge } from "@/components/shared/PnlBadge";
 import { DirectionBadge } from "@/components/shared/DirectionBadge";
 import { TimeAgo } from "@/components/shared/TimeAgo";
-import { formatUsd, formatPrice, formatPct } from "@/lib/format";
+import { formatUsd, formatPrice, formatPct, parseTimestamp } from "@/lib/format";
 import type { BotStatus } from "@/lib/types";
 import type { TradeStats } from "@/lib/types";
 import {
@@ -84,7 +84,7 @@ function EquityChart() {
   }
 
   const data = snapshots.map((s) => ({
-    time: new Date(s.timestamp + "Z").toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
+    time: parseTimestamp(s.timestamp).toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }),
     balance: s.total_usdc,
   }));
 
@@ -162,13 +162,13 @@ function OpenPositionsTable() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-text-muted text-xs border-b border-border">
-              <th className="text-left pb-2">Symbol</th>
-              <th className="text-left pb-2">Dir</th>
-              <th className="text-right pb-2">Entry</th>
-              <th className="text-right pb-2">Current</th>
-              <th className="text-right pb-2">PnL</th>
-              <th className="text-right pb-2">SL</th>
-              <th className="text-right pb-2">Lev</th>
+              <th className="text-left pb-2 pr-3">Symbol</th>
+              <th className="text-left pb-2 pr-3">Dir</th>
+              <th className="text-right pb-2 pr-3">Entry</th>
+              <th className="text-right pb-2 pr-3">Current</th>
+              <th className="text-right pb-2 pr-3">PnL</th>
+              <th className="text-right pb-2 pr-3">SL</th>
+              <th className="text-right pb-2 pr-3">Lev</th>
               <th className="text-left pb-2">Strategy</th>
             </tr>
           </thead>
@@ -187,11 +187,11 @@ function OpenPositionsTable() {
               }
               return (
                 <tr key={p.id} className="border-b border-border/50 hover:bg-bg-card-hover">
-                  <td className="py-2 font-medium">{p.symbol}</td>
-                  <td className="py-2"><DirectionBadge direction={p.direction} /></td>
-                  <td className="py-2 text-right font-mono">{formatPrice(p.entry_price)}</td>
-                  <td className="py-2 text-right font-mono">{mid ? formatPrice(mid) : "—"}</td>
-                  <td className="py-2 text-right">
+                  <td className="py-2 pr-3 font-medium">{p.symbol}</td>
+                  <td className="py-2 pr-3"><DirectionBadge direction={p.direction} /></td>
+                  <td className="py-2 pr-3 text-right font-mono">{formatPrice(p.entry_price)}</td>
+                  <td className="py-2 pr-3 text-right font-mono">{mid ? formatPrice(mid) : "—"}</td>
+                  <td className="py-2 pr-3 text-right">
                     {mid ? (
                       <span className="flex flex-col items-end">
                         <PnlBadge value={pnl} />
@@ -201,10 +201,10 @@ function OpenPositionsTable() {
                       </span>
                     ) : "—"}
                   </td>
-                  <td className="py-2 text-right font-mono text-text-muted">
+                  <td className="py-2 pr-3 text-right font-mono text-text-muted">
                     {p.trailing_sl ? formatPrice(p.trailing_sl) : p.stop_loss ? formatPrice(p.stop_loss) : "—"}
                   </td>
-                  <td className="py-2 text-right">{p.leverage}x</td>
+                  <td className="py-2 pr-3 text-right">{p.leverage}x</td>
                   <td className="py-2 text-text-muted">{p.strategy}</td>
                 </tr>
               );
@@ -233,26 +233,26 @@ function RecentTradesTable() {
         <table className="w-full text-sm">
           <thead>
             <tr className="text-text-muted text-xs border-b border-border">
-              <th className="text-left pb-2">Symbol</th>
-              <th className="text-left pb-2">Side</th>
-              <th className="text-right pb-2">Price</th>
-              <th className="text-right pb-2">PnL</th>
+              <th className="text-left pb-2 pr-3">Symbol</th>
+              <th className="text-left pb-2 pr-3">Side</th>
+              <th className="text-right pb-2 pr-3">Price</th>
+              <th className="text-right pb-2 pr-3">PnL</th>
               <th className="text-right pb-2">Time</th>
             </tr>
           </thead>
           <tbody>
             {trades.map((t) => (
               <tr key={t.id} className="border-b border-border/50 hover:bg-bg-card-hover">
-                <td className="py-2 font-medium">{t.symbol}</td>
-                <td className="py-2">
+                <td className="py-2 pr-3 font-medium">{t.symbol}</td>
+                <td className="py-2 pr-3">
                   <span className={`text-xs font-medium ${
                     t.side === "BUY" ? "text-profit" : t.side === "SHORT" ? "text-loss" : "text-text-muted"
                   }`}>
                     {t.side}
                   </span>
                 </td>
-                <td className="py-2 text-right font-mono">{formatPrice(t.price)}</td>
-                <td className="py-2 text-right">
+                <td className="py-2 pr-3 text-right font-mono">{formatPrice(t.price)}</td>
+                <td className="py-2 pr-3 text-right">
                   {t.pnl !== null ? <PnlBadge value={t.pnl} /> : "—"}
                 </td>
                 <td className="py-2 text-right">
