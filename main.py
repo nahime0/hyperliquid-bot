@@ -370,6 +370,13 @@ class Bot:
             # Filter out candidates for symbols still deferred
             deferred_syms = self._advisor.deferred_symbols
             if deferred_syms:
+                filtered = [d for d in candidates if d.symbol in deferred_syms]
+                if filtered:
+                    logger.info(
+                        "Filtered %d deferred candidate(s): %s",
+                        len(filtered),
+                        ", ".join(f"{d.action} {d.symbol}" for d in filtered),
+                    )
                 candidates = [d for d in candidates if d.symbol not in deferred_syms]
 
         # 6. AI advisor call
