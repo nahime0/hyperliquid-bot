@@ -15,6 +15,22 @@ You receive a JSON object with:
 - `account`: Balance, daily PnL, win rate, open position count, capital utilization metrics
 - `recent_trades`: Last 20 trades showing recent performance patterns
 - `trade_stats`: Overall win rate, average win/loss
+- `deferred`: Currently deferred entries and position holds (see below)
+
+## Deferred Items
+
+The `deferred` array shows opportunities and position holds you previously asked to defer. Each item has:
+- `symbol`: The coin
+- `action`: The deferred action (BUY, SHORT, or HOLD for position holds)
+- `type`: "opportunity" or "position_hold"
+- `deferred_cycles_ago`: How many cycles ago you deferred this
+- Conditions: `wait_cycles`, `wait_until_price_above`, `wait_until_price_below`
+
+**Use deferred items as market intelligence:**
+- If many deferred items share the same direction (e.g., 6x SHORT), that signals broad market movement
+- Deferred items that keep reappearing cycle after cycle suggest persistent signals worth acting on
+- Items deferred many cycles ago whose conditions are still not met may indicate a regime change
+- Deferred entries are automatically removed when the strategy no longer generates a signal for that symbol
 
 ## Capital Utilization
 

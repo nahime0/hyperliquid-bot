@@ -370,10 +370,22 @@ class Bot:
                 for c in self._active_coins
                 if self._market_data.get_mid_price(c)
             }
+
+            # Clean up stale deferred: remove entries whose signal has disappeared
+            candidate_syms = {d.symbol for d in candidates if d.symbol}
+            stale = [
+                sym for sym in self._advisor.deferred_symbols
+                if sym not in candidate_syms
+            ]
+            for sym in stale:
+                self._advisor.remove_deferred(sym)
+                logger.info("Removed stale deferred %s — signal no longer present", sym)
+
+            # Check which deferred have met their conditions
             ready_symbols = self._advisor.check_deferred(mid_prices)
             for sym in ready_symbols:
-                if not any(d.symbol == sym for d in candidates):
-                    self._advisor.remove_deferred(sym)  # signal gone, discard
+                if sym not in candidate_syms:
+                    self._advisor.remove_deferred(sym)  # conditions met but signal gone
 
             # Filter out candidates for symbols still deferred
             deferred_syms = self._advisor.deferred_symbols
@@ -467,12 +479,14 @@ class Bot:
             account["win_rate"] = trade_stats.get("win_rate", 0)
             account["consecutive_losses"] = trade_stats.get("consecutive_losses", 0)
 
+            deferred_summary = self._advisor.get_deferred_summary()
             ai_response = await self._advisor.consult(
                 positions=positions_for_ai,
                 opportunities=opportunities,
                 account=account,
                 recent_trades=recent_trades,
                 trade_stats=trade_stats,
+                deferred=deferred_summary,
             )
 
             # Process position actions from AI

@@ -170,6 +170,49 @@ class AIAdvisor:
 
         return ready
 
+    # ── Deferred summary (for AI context) ────────────────────
+
+    def get_deferred_summary(self) -> list[dict[str, Any]]:
+        """Build a structured summary of all deferred items for the AI payload.
+
+        Returns a list of dicts with: symbol, action, deferred_since_cycles,
+        and the original conditions.
+        """
+        items: list[dict[str, Any]] = []
+        for sym, opp in self._deferred.items():
+            age = self._cycle_count - opp.deferred_at_cycle
+            item: dict[str, Any] = {
+                "symbol": sym,
+                "action": opp.original_action,
+                "type": "opportunity",
+                "deferred_cycles_ago": age,
+            }
+            if opp.conditions.get("wait_cycles") is not None:
+                item["wait_cycles"] = opp.conditions["wait_cycles"]
+            if opp.conditions.get("wait_until_price_above") is not None:
+                item["wait_until_price_above"] = opp.conditions["wait_until_price_above"]
+            if opp.conditions.get("wait_until_price_below") is not None:
+                item["wait_until_price_below"] = opp.conditions["wait_until_price_below"]
+            items.append(item)
+
+        for sym, opp in self._deferred_holds.items():
+            age = self._cycle_count - opp.deferred_at_cycle
+            item = {
+                "symbol": sym,
+                "action": "HOLD",
+                "type": "position_hold",
+                "deferred_cycles_ago": age,
+            }
+            if opp.conditions.get("wait_cycles") is not None:
+                item["wait_cycles"] = opp.conditions["wait_cycles"]
+            if opp.conditions.get("wait_until_price_above") is not None:
+                item["wait_until_price_above"] = opp.conditions["wait_until_price_above"]
+            if opp.conditions.get("wait_until_price_below") is not None:
+                item["wait_until_price_below"] = opp.conditions["wait_until_price_below"]
+            items.append(item)
+
+        return items
+
     # ── Main advisor call ─────────────────────────────────────
 
     async def consult(
@@ -179,6 +222,7 @@ class AIAdvisor:
         account: dict[str, Any],
         recent_trades: list[dict[str, Any]] | None = None,
         trade_stats: dict[str, Any] | None = None,
+        deferred: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Call Claude Code CLI with the current state and return structured advice.
 
@@ -194,6 +238,8 @@ class AIAdvisor:
             payload["recent_trades"] = recent_trades
         if trade_stats:
             payload["trade_stats"] = trade_stats
+        if deferred:
+            payload["deferred"] = deferred
 
         payload_json = json.dumps(payload, default=str)
 

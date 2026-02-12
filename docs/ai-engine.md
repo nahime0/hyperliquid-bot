@@ -92,7 +92,11 @@ claude -p "<json_payload>" \
     "available_margin": 930.0, "target_utilization_pct": 50.0
   },
   "recent_trades": [ ... ],
-  "trade_stats": { "total_trades": 42, "win_rate": 0.62, "avg_win": 8.5, "avg_loss": -5.2 }
+  "trade_stats": { "total_trades": 42, "win_rate": 0.62, "avg_win": 8.5, "avg_loss": -5.2 },
+  "deferred": [
+    { "symbol": "ETH", "action": "SHORT", "type": "opportunity", "deferred_cycles_ago": 3, "wait_cycles": 5 },
+    { "symbol": "SOL", "action": "HOLD", "type": "position_hold", "deferred_cycles_ago": 8, "wait_until_price_above": 200 }
+  ]
 }
 ```
 

@@ -151,6 +151,48 @@ class TestDeferredHolds:
         advisor.remove_deferred_hold("XYZ")  # no error
 
 
+class TestDeferredSummary:
+    def test_empty_summary(self):
+        advisor = AIAdvisor(model="haiku")
+        assert advisor.get_deferred_summary() == []
+
+    def test_summary_includes_opportunities_and_holds(self):
+        advisor = AIAdvisor(model="haiku")
+        advisor.set_cycle(10)
+        advisor.defer("ETH", "SHORT", {"wait_cycles": 3})
+        advisor.defer("BTC", "SHORT", {"wait_until_price_below": 55000})
+        advisor.defer_hold("SOL", {"wait_cycles": 5, "wait_until_price_above": 200})
+        advisor.set_cycle(12)
+
+        summary = advisor.get_deferred_summary()
+        assert len(summary) == 3
+
+        eth = next(s for s in summary if s["symbol"] == "ETH")
+        assert eth["action"] == "SHORT"
+        assert eth["type"] == "opportunity"
+        assert eth["deferred_cycles_ago"] == 2
+        assert eth["wait_cycles"] == 3
+
+        btc = next(s for s in summary if s["symbol"] == "BTC")
+        assert btc["action"] == "SHORT"
+        assert btc["wait_until_price_below"] == 55000
+        assert "wait_cycles" not in btc
+
+        sol = next(s for s in summary if s["symbol"] == "SOL")
+        assert sol["action"] == "HOLD"
+        assert sol["type"] == "position_hold"
+        assert sol["wait_until_price_above"] == 200
+
+    def test_summary_after_removal(self):
+        advisor = AIAdvisor(model="haiku")
+        advisor.defer("ETH", "SHORT", {"wait_cycles": 3})
+        advisor.defer("BTC", "BUY", {"wait_cycles": 5})
+        advisor.remove_deferred("ETH")
+        summary = advisor.get_deferred_summary()
+        assert len(summary) == 1
+        assert summary[0]["symbol"] == "BTC"
+
+
 # ── CLI invocation (mocked) ─────────────────────────────────
 
 
