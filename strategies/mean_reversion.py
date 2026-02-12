@@ -4,19 +4,19 @@ Generates BUY/SHORT/SELL/CLOSE decisions autonomously.
 The AI is demoted to an optional review/veto role.
 
 LONG Entry (ALL must be true):
-  - Trend filter BULLISH or NEUTRAL on 1h
-  - RSI(14) < 30 on 15m (oversold)
+  - RSI(14) < 35 on 15m (oversold — relaxed, AI filters)
   - Price <= lower Bollinger Band on 15m
   - RSI on 1h < 60 (no macro divergence)
   - Cooldown passed for the symbol
   - No open position on the same symbol
+  - Trend info passed to AI but NOT used as gate
 
 SHORT Entry (ALL must be true):
-  - Trend filter BEARISH on 1h (EMA50 < EMA200, price < EMA50, slope < 0)
-  - RSI(14) > 70 on 15m (overbought)
+  - RSI(14) > 65 on 15m (overbought — relaxed, AI filters)
   - Price >= upper Bollinger Band on 15m
   - RSI on 1h > 40
   - Cooldown passed + no open position
+  - Trend info passed to AI but NOT used as gate
 
 Funding rate: |funding| < max_funding_rate before any entry.
 
@@ -49,9 +49,9 @@ logger = get_logger(__name__)
 
 # ── Signal thresholds ────────────────────────────────────────
 
-RSI_OVERSOLD = 30.0           # standard oversold (was 25)
-RSI_OVERBOUGHT = 70.0         # exit for LONG
-RSI_OVERBOUGHT_ENTRY = 70.0   # entry for SHORT (was 75)
+RSI_OVERSOLD = 35.0           # relaxed oversold (was 30) — AI does fine filtering
+RSI_OVERBOUGHT = 65.0         # exit for LONG (was 70)
+RSI_OVERBOUGHT_ENTRY = 65.0   # entry for SHORT (was 70) — AI does fine filtering
 RSI_1H_MAX = 60.0             # macro RSI ceiling for LONG entries
 RSI_1H_MIN_SHORT = 40.0       # macro RSI floor for SHORT entries
 RSI_PERIOD = 14
@@ -368,9 +368,7 @@ class MeanReversionStrategy(Strategy):
             f"RSI_1h={f'{sig.rsi_1h:.1f}' if sig.rsi_1h is not None else 'N/A'}"
         )
 
-        if sig.trend not in ("BULLISH", "NEUTRAL"):
-            logger.debug("[MR LONG] %s: %s → SKIP: trend not bullish/neutral", symbol, diag)
-            return None
+        # Trend filter removed — AI does fine filtering on trend
         if sig.rsi is None or sig.rsi >= RSI_OVERSOLD:
             logger.debug("[MR LONG] %s: %s → SKIP: RSI >= %.0f", symbol, diag, RSI_OVERSOLD)
             return None
@@ -421,9 +419,7 @@ class MeanReversionStrategy(Strategy):
             f"RSI_1h={f'{sig.rsi_1h:.1f}' if sig.rsi_1h is not None else 'N/A'}"
         )
 
-        if not self._trend.is_bearish(symbol):
-            logger.debug("[MR SHORT] %s: %s → SKIP: trend not bearish", symbol, diag)
-            return None
+        # Trend filter removed — AI does fine filtering on trend
         if sig.rsi is None or sig.rsi <= RSI_OVERBOUGHT_ENTRY:
             logger.debug("[MR SHORT] %s: %s → SKIP: RSI <= %.0f", symbol, diag, RSI_OVERBOUGHT_ENTRY)
             return None

@@ -3,17 +3,17 @@
 Detects RSI divergences on 5m candles and generates BUY/SHORT/CLOSE decisions.
 
 LONG Entry (ALL must be true):
-  - Trend filter BULLISH or NEUTRAL on 1h
   - Bullish divergence: price makes lower low, RSI makes higher low
   - Cooldown passed for the symbol
   - No open position on the same symbol
   - Funding rate acceptable
+  - Trend info passed to AI but NOT used as gate
 
 SHORT Entry (ALL must be true):
-  - Trend filter BEARISH or NEUTRAL on 1h
   - Bearish divergence: price makes higher high, RSI makes lower high
   - Cooldown passed + no open position
   - Funding rate acceptable
+  - Trend info passed to AI but NOT used as gate
 
 Exit (ANY trigger):
   - LONG: RSI > rsi_long_exit (default 60)
@@ -213,7 +213,7 @@ class RSIDivergenceStrategy(Strategy):
                     if len(df) - curr_i <= 50:
                         price_diff = (prev_price - curr_price) / prev_price
                         rsi_diff = curr_rsi - prev_rsi
-                        confidence = min(0.85, 0.5 + price_diff * 5 + rsi_diff * 0.01)
+                        confidence = min(0.85, 0.4 + price_diff * 5 + rsi_diff * 0.01)
                         divergence = "BULLISH_DIV"
                         reason = (
                             f"Bullish div: price {prev_price:.4f}->{curr_price:.4f} "
@@ -234,7 +234,7 @@ class RSIDivergenceStrategy(Strategy):
                     if len(df) - curr_i <= 50:
                         price_diff = (curr_price - prev_price) / prev_price
                         rsi_diff = prev_rsi - curr_rsi
-                        confidence = min(0.85, 0.5 + price_diff * 5 + rsi_diff * 0.01)
+                        confidence = min(0.85, 0.4 + price_diff * 5 + rsi_diff * 0.01)
                         divergence = "BEARISH_DIV"
                         reason = (
                             f"Bearish div: price {prev_price:.4f}->{curr_price:.4f} "
@@ -342,9 +342,7 @@ class RSIDivergenceStrategy(Strategy):
         """Check if a LONG entry via bullish divergence is warranted."""
         diag = f"div={sig.divergence}, trend={sig.trend}, RSI={f'{sig.rsi:.1f}' if sig.rsi else 'N/A'}, conf={sig.confidence:.2f}"
 
-        if sig.trend not in ("BULLISH", "NEUTRAL"):
-            logger.debug("[RD LONG] %s: %s → SKIP: trend=%s (need BULLISH/NEUTRAL)", symbol, diag, sig.trend)
-            return None
+        # Trend filter removed — AI does fine filtering on trend
 
         if not self._funding_ok(symbol):
             logger.debug("[RD LONG] %s: %s → SKIP: high funding rate", symbol, diag)
@@ -370,9 +368,7 @@ class RSIDivergenceStrategy(Strategy):
         """Check if a SHORT entry via bearish divergence is warranted."""
         diag = f"div={sig.divergence}, trend={sig.trend}, RSI={f'{sig.rsi:.1f}' if sig.rsi else 'N/A'}, conf={sig.confidence:.2f}"
 
-        if sig.trend not in ("BEARISH", "NEUTRAL"):
-            logger.debug("[RD SHORT] %s: %s → SKIP: trend=%s (need BEARISH/NEUTRAL)", symbol, diag, sig.trend)
-            return None
+        # Trend filter removed — AI does fine filtering on trend
 
         if not self._funding_ok(symbol):
             logger.debug("[RD SHORT] %s: %s → SKIP: high funding rate", symbol, diag)

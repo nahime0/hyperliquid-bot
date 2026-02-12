@@ -88,7 +88,7 @@ class MarketConfig:
 class StrategyConfig:
     active_strategies: tuple[str, ...] = ("mean_reversion", "rsi_divergence")
     rsi_div_period: int = 14
-    rsi_div_swing_window: int = 4       # optimized: sw=4 dominated 100% of top 30
+    rsi_div_swing_window: int = 5       # wider window to catch more divergences (was 4)
     rsi_div_long_exit: float = 55.0     # optimized: le=55 in 50% of top 30
     rsi_div_short_exit: float = 35.0    # optimized: se=35 in 73% of top 30
     min_candle_volume_usdc: float = 10_000.0  # skip coins with candle volume below this
@@ -174,7 +174,7 @@ def load_settings() -> Settings:
                 os.getenv("ACTIVE_STRATEGIES", "mean_reversion,rsi_divergence").split(",")
             ),
             rsi_div_period=int(os.getenv("RSI_DIV_PERIOD", "14")),
-            rsi_div_swing_window=int(os.getenv("RSI_DIV_SWING_WINDOW", "4")),
+            rsi_div_swing_window=int(os.getenv("RSI_DIV_SWING_WINDOW", "5")),
             rsi_div_long_exit=float(os.getenv("RSI_DIV_LONG_EXIT", "55.0")),
             rsi_div_short_exit=float(os.getenv("RSI_DIV_SHORT_EXIT", "35.0")),
             min_candle_volume_usdc=float(os.getenv("MIN_CANDLE_VOLUME_USDC", "10000")),
