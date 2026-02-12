@@ -780,8 +780,6 @@ class Bot:
                 break  # shutdown signalled
             except asyncio.TimeoutError:
                 pass
-            if self._risk._kill_switch:
-                continue
             try:
                 n = len(self._tracker.open_positions)
                 if n:
