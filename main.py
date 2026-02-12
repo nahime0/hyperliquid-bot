@@ -783,6 +783,9 @@ class Bot:
             if self._risk._kill_switch:
                 continue
             try:
+                n = len(self._tracker.open_positions)
+                if n:
+                    logger.debug("SL/TP check: %d open position(s)", n)
                 async with self._close_lock:
                     await self._check_positions()
             except Exception:
