@@ -16,6 +16,14 @@
               "leverage": { "type": "integer", "minimum": 1, "maximum": 10 }
             }
           },
+          "defer": {
+            "type": "object",
+            "properties": {
+              "wait_cycles": { "type": "integer" },
+              "wait_until_price_above": { "type": "number" },
+              "wait_until_price_below": { "type": "number" }
+            }
+          },
           "reasoning": { "type": "string" }
         },
         "required": ["symbol", "action", "reasoning"]

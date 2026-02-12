@@ -419,7 +419,29 @@ class Bot:
                 }
                 opportunities.append(opp)
 
-        if not self._no_ai and (open_positions or opportunities):
+        # Filter out positions with deferred holds
+        positions_for_ai = open_positions
+        if not self._no_ai:
+            # Check if any deferred holds are ready for re-evaluation
+            ready_holds = self._advisor.check_deferred_holds(mid_prices)
+            # Also remove holds for positions that were closed
+            open_syms = {p["symbol"] for p in open_positions}
+            for sym in list(self._advisor.deferred_hold_symbols):
+                if sym not in open_syms:
+                    self._advisor.remove_deferred_hold(sym)
+            # Filter out positions still deferred
+            held_syms = self._advisor.deferred_hold_symbols
+            if held_syms:
+                filtered_holds = [p for p in open_positions if p["symbol"] in held_syms]
+                if filtered_holds:
+                    logger.info(
+                        "Skipping %d deferred HOLD position(s): %s",
+                        len(filtered_holds),
+                        ", ".join(p["symbol"] for p in filtered_holds),
+                    )
+                positions_for_ai = [p for p in open_positions if p["symbol"] not in held_syms]
+
+        if not self._no_ai and (positions_for_ai or opportunities):
             account = {
                 "balance_usdc": metrics.get("current_balance", 0),
                 "daily_pnl_pct": -metrics.get("daily_drawdown_pct", 0),
@@ -433,7 +455,7 @@ class Bot:
             account["consecutive_losses"] = trade_stats.get("consecutive_losses", 0)
 
             ai_response = await self._advisor.consult(
-                positions=open_positions,
+                positions=positions_for_ai,
                 opportunities=opportunities,
                 account=account,
                 recent_trades=recent_trades,
@@ -450,6 +472,10 @@ class Bot:
                         reasoning=f"AI: {pa.get('reasoning', '')}",
                         strategy_type="ai_advisor",
                     ))
+                elif pa["action"] == "HOLD":
+                    defer_cond = pa.get("defer")
+                    if defer_cond:
+                        self._advisor.defer_hold(pa["symbol"], defer_cond)
                 elif pa["action"] == "ADJUST":
                     pos = next((p for p in open_positions if p["symbol"] == pa["symbol"]), None)
                     if pos:

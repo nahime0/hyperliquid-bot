@@ -107,6 +107,50 @@ class TestDeferredTracking:
         assert advisor._cycle_count == 10
 
 
+class TestDeferredHolds:
+    def test_defer_hold_adds_symbol(self):
+        advisor = AIAdvisor(model="haiku")
+        advisor.defer_hold("SOL", {"wait_cycles": 5})
+        assert "SOL" in advisor.deferred_hold_symbols
+
+    def test_defer_hold_separate_from_opportunities(self):
+        advisor = AIAdvisor(model="haiku")
+        advisor.defer("SOL", "BUY", {"wait_cycles": 3})
+        advisor.defer_hold("ETH", {"wait_cycles": 5})
+        assert advisor.deferred_symbols == {"SOL"}
+        assert advisor.deferred_hold_symbols == {"ETH"}
+
+    def test_check_deferred_holds_wait_cycles(self):
+        advisor = AIAdvisor(model="haiku")
+        advisor.set_cycle(1)
+        advisor.defer_hold("SOL", {"wait_cycles": 5})
+        advisor.set_cycle(3)
+        ready = advisor.check_deferred_holds({})
+        assert "SOL" not in ready
+        advisor.set_cycle(7)
+        ready = advisor.check_deferred_holds({})
+        assert "SOL" in ready
+        assert "SOL" not in advisor.deferred_hold_symbols
+
+    def test_check_deferred_holds_price(self):
+        advisor = AIAdvisor(model="haiku")
+        advisor.defer_hold("BTC", {"wait_until_price_below": 58000})
+        ready = advisor.check_deferred_holds({"BTC": 59000})
+        assert "BTC" not in ready
+        ready = advisor.check_deferred_holds({"BTC": 57000})
+        assert "BTC" in ready
+
+    def test_remove_deferred_hold(self):
+        advisor = AIAdvisor(model="haiku")
+        advisor.defer_hold("SOL", {"wait_cycles": 5})
+        advisor.remove_deferred_hold("SOL")
+        assert "SOL" not in advisor.deferred_hold_symbols
+
+    def test_remove_deferred_hold_nonexistent(self):
+        advisor = AIAdvisor(model="haiku")
+        advisor.remove_deferred_hold("XYZ")  # no error
+
+
 # ── CLI invocation (mocked) ─────────────────────────────────
 
 

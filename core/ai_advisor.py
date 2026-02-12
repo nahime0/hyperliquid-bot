@@ -59,11 +59,18 @@ class AIAdvisor:
 
         # Deferred opportunities (in-memory, transient)
         self._deferred: dict[str, DeferredOpportunity] = {}
+        # Deferred position holds (same structure, separate tracking)
+        self._deferred_holds: dict[str, DeferredOpportunity] = {}
 
     @property
     def deferred_symbols(self) -> set[str]:
-        """Symbols currently deferred."""
+        """Symbols with deferred opportunities."""
         return set(self._deferred.keys())
+
+    @property
+    def deferred_hold_symbols(self) -> set[str]:
+        """Symbols with deferred position holds."""
+        return set(self._deferred_holds.keys())
 
     def set_cycle(self, cycle: int) -> None:
         """Update the current cycle count (called from main loop)."""
@@ -95,32 +102,61 @@ class AIAdvisor:
 
         Returns list of symbols ready for re-evaluation.
         """
+        return self._check_conditions(self._deferred, mid_prices, "opportunity")
+
+    # ── Deferred position hold management ─────────────────────
+
+    def defer_hold(self, symbol: str, conditions: dict[str, Any]) -> None:
+        """Defer re-evaluation of a position HOLD."""
+        self._deferred_holds[symbol] = DeferredOpportunity(
+            symbol=symbol,
+            original_action="HOLD",
+            deferred_at_cycle=self._cycle_count,
+            conditions=conditions,
+        )
+        logger.info("Deferred HOLD %s — conditions: %s", symbol, conditions)
+
+    def remove_deferred_hold(self, symbol: str) -> None:
+        """Remove a deferred position hold (position closed or conditions met)."""
+        if symbol in self._deferred_holds:
+            del self._deferred_holds[symbol]
+
+    def check_deferred_holds(self, mid_prices: dict[str, float]) -> list[str]:
+        """Check which deferred holds have met their conditions.
+
+        Returns list of symbols ready for AI re-evaluation.
+        """
+        return self._check_conditions(self._deferred_holds, mid_prices, "hold")
+
+    # ── Shared condition checker ────────────────────────────
+
+    def _check_conditions(
+        self,
+        store: dict[str, DeferredOpportunity],
+        mid_prices: dict[str, float],
+        label: str,
+    ) -> list[str]:
         ready: list[str] = []
         to_remove: list[str] = []
 
-        for symbol, opp in self._deferred.items():
+        for symbol, opp in store.items():
             cond = opp.conditions
             met = False
 
-            # Check wait_cycles
             wait_cycles = cond.get("wait_cycles")
             if wait_cycles is not None:
-                elapsed = self._cycle_count - opp.deferred_at_cycle
-                if elapsed >= wait_cycles:
+                if self._cycle_count - opp.deferred_at_cycle >= wait_cycles:
                     met = True
 
-            # Check price conditions
             price = mid_prices.get(symbol)
             if price is not None:
                 above = cond.get("wait_until_price_above")
                 if above is not None and price >= above:
                     met = True
-
                 below = cond.get("wait_until_price_below")
                 if below is not None and price <= below:
                     met = True
 
-            # No conditions at all → ready immediately
             if not cond:
                 met = True
 
@@ -129,8 +165,8 @@ class AIAdvisor:
                 to_remove.append(symbol)
 
         for symbol in to_remove:
-            del self._deferred[symbol]
-            logger.info("Deferred opportunity %s conditions met — re-evaluating", symbol)
+            del store[symbol]
+            logger.info("Deferred %s %s conditions met — re-evaluating", label, symbol)
 
         return ready
 

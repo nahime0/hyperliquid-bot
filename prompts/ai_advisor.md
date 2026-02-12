@@ -19,7 +19,11 @@ You receive a JSON object with:
 ## Decision Guidelines
 
 ### For Positions (action: HOLD | CLOSE | ADJUST)
-- **HOLD**: Position is fine, let trailing stops and time stops do their job
+- **HOLD**: Position is fine, let trailing stops and time stops do their job. Use `defer` to avoid being asked again until conditions change:
+  - `wait_cycles`: Don't re-evaluate for N cycles (each cycle ~60s). Use 3-5 for fresh positions, 10+ for stable holds.
+  - `wait_until_price_above`: Re-evaluate only if price rises above this level
+  - `wait_until_price_below`: Re-evaluate only if price drops below this level
+  - Always specify defer conditions for HOLD — this saves tokens and avoids redundant reviews.
 - **CLOSE**: Close immediately if fundamentals have changed or risk is too high
 - **ADJUST**: Modify SL, TP, or leverage. Use this to:
   - Tighten stops on positions showing weakness
