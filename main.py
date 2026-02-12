@@ -521,6 +521,8 @@ class Bot:
                         orig.take_profit = adj["take_profit"]
                     if adj.get("size_pct") is not None:
                         orig.size_pct = adj["size_pct"]
+                    if adj.get("leverage") is not None:
+                        orig.leverage = adj["leverage"]
                     approved.append(orig)
 
             # Keep AI-approved entries + all CLOSE/SELL decisions
@@ -914,7 +916,7 @@ class Bot:
         """Execute a BUY or SHORT entry on Hyperliquid."""
         symbol = decision.symbol
         price = await self._client.get_price(symbol)
-        leverage = self._settings.hyperliquid.default_leverage
+        leverage = decision.leverage or self._settings.hyperliquid.default_leverage
 
         # Ensure leverage is set on Hyperliquid BEFORE placing the order
         try:

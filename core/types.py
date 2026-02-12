@@ -18,4 +18,5 @@ class Decision:
     stop_loss: float | None = None
     take_profit: float | None = None
     strategy_type: str | None = None  # mean_reversion, rsi_divergence, multi
+    leverage: int | None = None  # AI-specified leverage override
     raw_response: str | None = None
