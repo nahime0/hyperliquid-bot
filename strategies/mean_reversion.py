@@ -369,30 +369,30 @@ class MeanReversionStrategy(Strategy):
         )
 
         if sig.trend not in ("BULLISH", "NEUTRAL"):
-            logger.info("[MR LONG] %s: %s → SKIP: trend not bullish/neutral", symbol, diag)
+            logger.debug("[MR LONG] %s: %s → SKIP: trend not bullish/neutral", symbol, diag)
             return None
         if sig.rsi is None or sig.rsi >= RSI_OVERSOLD:
-            logger.info("[MR LONG] %s: %s → SKIP: RSI >= %.0f", symbol, diag, RSI_OVERSOLD)
+            logger.debug("[MR LONG] %s: %s → SKIP: RSI >= %.0f", symbol, diag, RSI_OVERSOLD)
             return None
         if sig.price is None or sig.bb_lower is None or sig.price > sig.bb_lower * 1.005:
-            logger.info("[MR LONG] %s: %s → SKIP: price not near lower BB", symbol, diag)
+            logger.debug("[MR LONG] %s: %s → SKIP: price not near lower BB", symbol, diag)
             return None
         if sig.volume_ratio is not None and sig.volume_ratio < MIN_VOLUME_RATIO:
-            logger.info("[MR LONG] %s: %s → SKIP: vol_ratio < %.1f", symbol, diag, MIN_VOLUME_RATIO)
+            logger.debug("[MR LONG] %s: %s → SKIP: vol_ratio < %.1f", symbol, diag, MIN_VOLUME_RATIO)
             return None
         if sig.rsi_1h is not None and sig.rsi_1h >= RSI_1H_MAX:
-            logger.info("[MR LONG] %s: %s → SKIP: RSI_1h >= %.0f", symbol, diag, RSI_1H_MAX)
+            logger.debug("[MR LONG] %s: %s → SKIP: RSI_1h >= %.0f", symbol, diag, RSI_1H_MAX)
             return None
         if not self._funding_ok(symbol):
-            logger.info("[MR LONG] %s: %s → SKIP: high funding rate", symbol, diag)
+            logger.debug("[MR LONG] %s: %s → SKIP: high funding rate", symbol, diag)
             return None
 
         can_buy, reason = self._cooldown.can_buy(symbol)
         if not can_buy:
-            logger.info("[MR LONG] %s: %s → SKIP: %s", symbol, diag, reason)
+            logger.debug("[MR LONG] %s: %s → SKIP: %s", symbol, diag, reason)
             return None
 
-        logger.info("[MR LONG] %s: %s → SIGNAL GENERATED", symbol, diag)
+        logger.debug("[MR LONG] %s: %s → SIGNAL GENERATED", symbol, diag)
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -422,30 +422,30 @@ class MeanReversionStrategy(Strategy):
         )
 
         if not self._trend.is_bearish(symbol):
-            logger.info("[MR SHORT] %s: %s → SKIP: trend not bearish", symbol, diag)
+            logger.debug("[MR SHORT] %s: %s → SKIP: trend not bearish", symbol, diag)
             return None
         if sig.rsi is None or sig.rsi <= RSI_OVERBOUGHT_ENTRY:
-            logger.info("[MR SHORT] %s: %s → SKIP: RSI <= %.0f", symbol, diag, RSI_OVERBOUGHT_ENTRY)
+            logger.debug("[MR SHORT] %s: %s → SKIP: RSI <= %.0f", symbol, diag, RSI_OVERBOUGHT_ENTRY)
             return None
         if sig.price is None or sig.bb_upper is None or sig.price < sig.bb_upper * 0.995:
-            logger.info("[MR SHORT] %s: %s → SKIP: price not near upper BB", symbol, diag)
+            logger.debug("[MR SHORT] %s: %s → SKIP: price not near upper BB", symbol, diag)
             return None
         if sig.volume_ratio is not None and sig.volume_ratio < MIN_VOLUME_RATIO:
-            logger.info("[MR SHORT] %s: %s → SKIP: vol_ratio < %.1f", symbol, diag, MIN_VOLUME_RATIO)
+            logger.debug("[MR SHORT] %s: %s → SKIP: vol_ratio < %.1f", symbol, diag, MIN_VOLUME_RATIO)
             return None
         if sig.rsi_1h is not None and sig.rsi_1h <= RSI_1H_MIN_SHORT:
-            logger.info("[MR SHORT] %s: %s → SKIP: RSI_1h <= %.0f", symbol, diag, RSI_1H_MIN_SHORT)
+            logger.debug("[MR SHORT] %s: %s → SKIP: RSI_1h <= %.0f", symbol, diag, RSI_1H_MIN_SHORT)
             return None
         if not self._funding_ok(symbol):
-            logger.info("[MR SHORT] %s: %s → SKIP: high funding rate", symbol, diag)
+            logger.debug("[MR SHORT] %s: %s → SKIP: high funding rate", symbol, diag)
             return None
 
         can_buy, reason = self._cooldown.can_buy(symbol)
         if not can_buy:
-            logger.info("[MR SHORT] %s: %s → SKIP: %s", symbol, diag, reason)
+            logger.debug("[MR SHORT] %s: %s → SKIP: %s", symbol, diag, reason)
             return None
 
-        logger.info("[MR SHORT] %s: %s → SIGNAL GENERATED", symbol, diag)
+        logger.debug("[MR SHORT] %s: %s → SIGNAL GENERATED", symbol, diag)
         return Decision(
             action="SHORT",
             symbol=symbol,

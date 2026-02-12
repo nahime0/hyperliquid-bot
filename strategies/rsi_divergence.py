@@ -343,19 +343,19 @@ class RSIDivergenceStrategy(Strategy):
         diag = f"div={sig.divergence}, trend={sig.trend}, RSI={f'{sig.rsi:.1f}' if sig.rsi else 'N/A'}, conf={sig.confidence:.2f}"
 
         if sig.trend not in ("BULLISH", "NEUTRAL"):
-            logger.info("[RD LONG] %s: %s → SKIP: trend=%s (need BULLISH/NEUTRAL)", symbol, diag, sig.trend)
+            logger.debug("[RD LONG] %s: %s → SKIP: trend=%s (need BULLISH/NEUTRAL)", symbol, diag, sig.trend)
             return None
 
         if not self._funding_ok(symbol):
-            logger.info("[RD LONG] %s: %s → SKIP: high funding rate", symbol, diag)
+            logger.debug("[RD LONG] %s: %s → SKIP: high funding rate", symbol, diag)
             return None
 
         can_buy, reason = self._cooldown.can_buy(symbol)
         if not can_buy:
-            logger.info("[RD LONG] %s: %s → SKIP: %s", symbol, diag, reason)
+            logger.debug("[RD LONG] %s: %s → SKIP: %s", symbol, diag, reason)
             return None
 
-        logger.info("[RD LONG] %s: %s → SIGNAL GENERATED", symbol, diag)
+        logger.debug("[RD LONG] %s: %s → SIGNAL GENERATED", symbol, diag)
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -371,19 +371,19 @@ class RSIDivergenceStrategy(Strategy):
         diag = f"div={sig.divergence}, trend={sig.trend}, RSI={f'{sig.rsi:.1f}' if sig.rsi else 'N/A'}, conf={sig.confidence:.2f}"
 
         if sig.trend not in ("BEARISH", "NEUTRAL"):
-            logger.info("[RD SHORT] %s: %s → SKIP: trend=%s (need BEARISH/NEUTRAL)", symbol, diag, sig.trend)
+            logger.debug("[RD SHORT] %s: %s → SKIP: trend=%s (need BEARISH/NEUTRAL)", symbol, diag, sig.trend)
             return None
 
         if not self._funding_ok(symbol):
-            logger.info("[RD SHORT] %s: %s → SKIP: high funding rate", symbol, diag)
+            logger.debug("[RD SHORT] %s: %s → SKIP: high funding rate", symbol, diag)
             return None
 
         can_buy, reason = self._cooldown.can_buy(symbol)
         if not can_buy:
-            logger.info("[RD SHORT] %s: %s → SKIP: %s", symbol, diag, reason)
+            logger.debug("[RD SHORT] %s: %s → SKIP: %s", symbol, diag, reason)
             return None
 
-        logger.info("[RD SHORT] %s: %s → SIGNAL GENERATED", symbol, diag)
+        logger.debug("[RD SHORT] %s: %s → SIGNAL GENERATED", symbol, diag)
         return Decision(
             action="SHORT",
             symbol=symbol,
