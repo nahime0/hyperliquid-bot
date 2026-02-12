@@ -181,20 +181,21 @@ class Bot:
         )
         logger.info("Active coins: %d", len(self._active_coins))
 
-        # Set leverage for all active coins (core + discovered + open positions)
+        # Set default leverage only for coins WITHOUT open positions
+        # (coins with positions keep their current leverage from HL)
         is_cross = cfg.margin_mode == "cross"
-        coins_to_set = set(self._active_coins)
-        # Also include coins with open positions on HL (may not be in active list)
         try:
             hl_positions = await self._client.get_open_positions()
-            coins_to_set |= {p["coin"] for p in hl_positions}
+            coins_with_positions = {p["coin"] for p in hl_positions}
         except Exception:
-            pass
-        for coin in coins_to_set:
-            try:
-                await self._client.update_leverage(coin, cfg.default_leverage, is_cross)
-            except Exception:
-                logger.debug("Failed to set leverage for %s", coin, exc_info=True)
+            hl_positions = []
+            coins_with_positions = set()
+        for coin in self._active_coins:
+            if coin not in coins_with_positions:
+                try:
+                    await self._client.update_leverage(coin, cfg.default_leverage, is_cross)
+                except Exception:
+                    logger.debug("Failed to set leverage for %s", coin, exc_info=True)
 
         # Market data — start WebSocket feeds with configured intervals
         intervals = list(self._settings.market.intervals)
@@ -667,6 +668,19 @@ class Bot:
                     mid = self._market_data.get_mid_price(pos["symbol"])
                     price = mid or pos["entry_price"]
                     await self._positions.close_position(pos["id"], price, "reconcile_phantom")
+
+            # Sync leverage from HL to tracker for existing positions
+            for hl_pos in hl_positions:
+                coin = hl_pos["coin"]
+                if coin in tracker_coins and coin not in orphaned:
+                    hl_lev = int(hl_pos.get("leverage", self._settings.hyperliquid.default_leverage))
+                    tracker_pos = next((p for p in tracker_positions if p["symbol"] == coin), None)
+                    if tracker_pos and tracker_pos.get("leverage") != hl_lev:
+                        await self._positions.update_leverage(tracker_pos["id"], hl_lev)
+                        logger.info(
+                            "RECONCILE: Synced leverage for %s: %dx → %dx (from Hyperliquid)",
+                            coin, tracker_pos.get("leverage", 0), hl_lev,
+                        )
 
             if not orphaned and not phantom:
                 logger.info("Position reconciliation OK — no discrepancies")
