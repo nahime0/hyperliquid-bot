@@ -31,7 +31,7 @@ import pandas as pd
 import ta as ta_lib
 
 from config.settings import RiskConfig, StrategyConfig
-from core.ai_engine.types import Decision, Tier
+from core.types import Decision
 from core.market_data import MarketData
 from risk.position_tracker import PositionTracker
 from strategies.base import Strategy
@@ -66,7 +66,7 @@ class RSIDivergenceStrategy(Strategy):
         position_tracker: PositionTracker,
         risk_config: RiskConfig,
         strategy_config: StrategyConfig,
-        pairs: list[str] | None = None,
+        coins: list[str] | None = None,
     ) -> None:
         self._md = market_data
         self._trend = trend_filter
@@ -74,7 +74,7 @@ class RSIDivergenceStrategy(Strategy):
         self._positions = position_tracker
         self._rc = risk_config
         self._sc = strategy_config
-        self._pairs = pairs or []
+        self._coins = coins or []
         self._interval = strategy_config.primary_interval  # 5m
         self._signals: dict[str, DivergenceSignal] = {}
         self._funding_rates: dict[str, float] = {}
@@ -86,9 +86,9 @@ class RSIDivergenceStrategy(Strategy):
         self._rsi_long_exit = strategy_config.rsi_div_long_exit
         self._rsi_short_exit = strategy_config.rsi_div_short_exit
 
-    def set_pairs(self, pairs: list[str]) -> None:
-        self._pairs = pairs
-        logger.info("RSIDivergence pairs updated: %d coins", len(pairs))
+    def set_coins(self, coins: list[str]) -> None:
+        self._coins = coins
+        logger.info("RSIDivergence coins updated: %d", len(coins))
 
     def set_funding_rates(self, rates: dict[str, float]) -> None:
         self._funding_rates = rates
@@ -102,7 +102,7 @@ class RSIDivergenceStrategy(Strategy):
         logger.info(
             "RSIDivergenceStrategy started — scanning %d coins on %s "
             "(rsi=%d, swing=%d, exit_l=%.0f, exit_s=%.0f)",
-            len(self._pairs), self._interval,
+            len(self._coins), self._interval,
             self._rsi_period, self._swing_window,
             self._rsi_long_exit, self._rsi_short_exit,
         )
@@ -114,7 +114,13 @@ class RSIDivergenceStrategy(Strategy):
     # -- Update (called every tick) --
 
     async def update(self) -> None:
-        tasks = [self._scan_pair(sym) for sym in self._pairs]
+        # Expire stale signals (>10 minutes old)
+        now = time.time()
+        stale = [k for k, v in self._signals.items() if now - v.updated_at > 600]
+        for k in stale:
+            del self._signals[k]
+
+        tasks = [self._scan_pair(sym) for sym in self._coins]
         await asyncio.gather(*tasks)
 
     async def _scan_pair(self, symbol: str) -> None:
@@ -261,7 +267,7 @@ class RSIDivergenceStrategy(Strategy):
                 decisions.append(exit_decision)
 
         # ENTRY checks
-        for symbol in self._pairs:
+        for symbol in self._coins:
             if symbol in open_symbols:
                 continue
 
@@ -302,7 +308,6 @@ class RSIDivergenceStrategy(Strategy):
             reasoning=f"[RSIDiv {direction} EXIT] {symbol}: {', '.join(reasons)}",
             strategy_type="rsi_divergence",
             order_type="MARKET",
-            tier=Tier.FALLBACK,
         )
 
     def _check_long_entry(self, symbol: str, sig: DivergenceSignal) -> Decision | None:
@@ -328,7 +333,6 @@ class RSIDivergenceStrategy(Strategy):
             strategy_type="rsi_divergence",
             size_pct=10.0,
             order_type="MARKET",
-            tier=Tier.FALLBACK,
         )
 
     def _check_short_entry(self, symbol: str, sig: DivergenceSignal) -> Decision | None:
@@ -354,7 +358,6 @@ class RSIDivergenceStrategy(Strategy):
             strategy_type="rsi_divergence",
             size_pct=10.0,
             order_type="MARKET",
-            tier=Tier.FALLBACK,
         )
 
     # -- State (for snapshot / dashboard) --

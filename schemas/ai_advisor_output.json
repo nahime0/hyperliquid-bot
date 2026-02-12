@@ -1,0 +1,55 @@
+{
+  "type": "object",
+  "properties": {
+    "positions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" },
+          "action": { "enum": ["HOLD", "CLOSE", "ADJUST"] },
+          "adjustments": {
+            "type": "object",
+            "properties": {
+              "stop_loss": { "type": "number" },
+              "take_profit": { "type": "number" },
+              "leverage": { "type": "integer", "minimum": 1, "maximum": 10 }
+            }
+          },
+          "reasoning": { "type": "string" }
+        },
+        "required": ["symbol", "action", "reasoning"]
+      }
+    },
+    "opportunities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "symbol": { "type": "string" },
+          "action": { "enum": ["BUY", "SHORT", "HOLD"] },
+          "adjustments": {
+            "type": "object",
+            "properties": {
+              "stop_loss": { "type": "number" },
+              "take_profit": { "type": "number" },
+              "size_pct": { "type": "number" },
+              "leverage": { "type": "integer", "minimum": 1, "maximum": 10 }
+            }
+          },
+          "defer": {
+            "type": "object",
+            "properties": {
+              "wait_cycles": { "type": "integer" },
+              "wait_until_price_above": { "type": "number" },
+              "wait_until_price_below": { "type": "number" }
+            }
+          },
+          "reasoning": { "type": "string" }
+        },
+        "required": ["symbol", "action", "reasoning"]
+      }
+    }
+  },
+  "required": ["positions", "opportunities"]
+}

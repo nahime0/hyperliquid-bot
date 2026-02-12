@@ -5,7 +5,7 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from core.ai_engine.types import Decision
+    from core.types import Decision
 
 
 class Strategy(ABC):

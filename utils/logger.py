@@ -48,7 +48,8 @@ def setup_logging(level: str = "INFO", log_dir: Path | None = None) -> None:
     # Quiet noisy libraries
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("websockets").setLevel(logging.WARNING)
-    logging.getLogger("binance").setLevel(logging.WARNING)
+    logging.getLogger("websocket").setLevel(logging.CRITICAL)
+    logging.getLogger("hyperliquid").setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:

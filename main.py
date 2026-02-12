@@ -1,14 +1,15 @@
 """Hyperliquid Perpetual Trading Bot — main entry point.
 
 Architecture:
-  Loop → Strategy generates candidates → Risk validates → [AI veto] → Execute
+  Loop → Strategy generates candidates → AI advisor reviews → Risk validates → Execute
 
 The bot trades autonomously with codified rules. Supports multiple strategies:
   - mean_reversion: Bollinger + RSI on 15m (original)
   - rsi_div: RSI Divergence on 5m (swing detection)
   - multi: Both strategies merged (default)
 
-AI is demoted to an optional review/veto role.
+AI advisor (Claude Code CLI) is optional: reviews positions and opportunities,
+can approve/defer/adjust entries, close/adjust positions.
 
 Usage:
     .venv/bin/python main.py                     # multi-strategy (default)
@@ -34,12 +35,14 @@ from typing import Any
 
 from config.pairs import ALL_COINS, CORE_COINS, discover_perp_coins
 from config.settings import Settings, load_settings
-from core.ai_engine import AIEngine, Decision, Tier
+from core.ai_advisor import AIAdvisor
 from core.client import HyperliquidClient
 from core.market_data import MarketData
+from core.types import Decision
 from data.db import Database
 from risk.position_tracker import PositionTracker
 from risk.risk_manager import RiskManager, ValidationResult
+from strategies.base import Strategy
 from strategies.cooldown import CooldownTracker
 from strategies.mean_reversion import MeanReversionStrategy
 from strategies.multi_strategy import MultiStrategy
@@ -91,7 +94,7 @@ class Bot:
         self._client = HyperliquidClient(settings)
         self._db = Database(settings.db_path)
         self._market_data = MarketData(self._client, settings)
-        self._ai = AIEngine(settings, self._db)
+        self._advisor = AIAdvisor(model=settings.ai.model, timeout=settings.ai.timeout)
         self._positions = PositionTracker(self._db, settings.risk)
         self._risk = RiskManager(settings.risk, self._client, self._db, self._positions)
 
@@ -192,9 +195,9 @@ class Bot:
         await self._market_data.start(self._active_coins, intervals=intervals)
 
         # Strategies — pass discovered coins
-        self._mean_rev.set_pairs(self._active_coins)
+        self._mean_rev.set_coins(self._active_coins)
         self._mean_rev.set_max_funding_rate(cfg.max_funding_rate)
-        self._rsi_div.set_pairs(self._active_coins)
+        self._rsi_div.set_coins(self._active_coins)
         self._rsi_div.set_max_funding_rate(cfg.max_funding_rate)
         await self._strategy.start()
 
@@ -202,9 +205,12 @@ class Bot:
         self._risk.set_active_pairs(self._active_coins)
         await self._risk.start()
 
-        # AI engine (for review mode)
+        # Reconcile tracker with Hyperliquid (detect orphaned/phantom positions)
+        await self._reconcile_positions()
+
+        # AI advisor (for review mode)
         if not self._no_ai:
-            await self._ai.start()
+            logger.info("AI advisor enabled (model=%s, timeout=%ds)", self._settings.ai.model, self._settings.ai.timeout)
 
         # Dashboard
         if not self._no_dashboard:
@@ -237,13 +243,6 @@ class Bot:
             await self._risk.snapshot_balance()
         except Exception:
             logger.exception("Error saving final balance snapshot")
-
-        # AI engine
-        if not self._no_ai:
-            try:
-                await self._ai.close()
-            except Exception:
-                logger.exception("Error closing AI engine")
 
         # Infrastructure
         try:
@@ -355,10 +354,137 @@ class Bot:
         else:
             logger.info("No trading candidates this cycle")
 
-        # 6. AI review (optional)
-        if candidates and not self._no_ai:
-            snapshot = await self._build_snapshot(metrics)
-            candidates = await self._ai.review_decisions(candidates, snapshot)
+        # 5b. Check deferred opportunities
+        if not self._no_ai:
+            self._advisor.set_cycle(self._cycle_count)
+            mid_prices = {
+                c: self._market_data.get_mid_price(c)
+                for c in self._active_coins
+                if self._market_data.get_mid_price(c)
+            }
+            ready_symbols = self._advisor.check_deferred(mid_prices)
+            for sym in ready_symbols:
+                if not any(d.symbol == sym for d in candidates):
+                    self._advisor.remove_deferred(sym)  # signal gone, discard
+
+            # Filter out candidates for symbols still deferred
+            deferred_syms = self._advisor.deferred_symbols
+            if deferred_syms:
+                candidates = [d for d in candidates if d.symbol not in deferred_syms]
+
+        # 6. AI advisor call
+        open_positions = await self._positions.get_open_positions()
+
+        # Enrich positions with current prices, PnL, indicators
+        now_utc = datetime.now(timezone.utc)
+        for pos in open_positions:
+            mid = self._market_data.get_mid_price(pos["symbol"])
+            if mid and mid > 0:
+                pos["current_price"] = mid
+                direction = pos.get("direction", "LONG")
+                if direction == "LONG":
+                    pos["unrealized_pnl"] = round((mid - pos["entry_price"]) * pos["quantity"], 4)
+                    pos["pnl_pct"] = round((mid - pos["entry_price"]) / pos["entry_price"] * 100, 2)
+                else:
+                    pos["unrealized_pnl"] = round((pos["entry_price"] - mid) * pos["quantity"], 4)
+                    pos["pnl_pct"] = round((pos["entry_price"] - mid) / pos["entry_price"] * 100, 2)
+            if pos.get("opened_at"):
+                opened = datetime.fromisoformat(pos["opened_at"].replace("Z", "+00:00"))
+                pos["age_minutes"] = round((now_utc - opened).total_seconds() / 60, 1)
+            # Add indicators from market data
+            pos["indicators"] = self._get_indicators(pos["symbol"])
+
+        # Build opportunity list from candidates (entries only)
+        opportunities = []
+        for d in candidates:
+            if d.action in ("BUY", "SHORT"):
+                opp = {
+                    "symbol": d.symbol,
+                    "proposed_action": d.action,
+                    "confidence": d.confidence,
+                    "strategy": d.strategy_type or "unknown",
+                    "reasoning": d.reasoning,
+                    "current_price": self._market_data.get_mid_price(d.symbol) or 0,
+                    "proposed_stop_loss": d.stop_loss,
+                    "proposed_take_profit": d.take_profit,
+                    "proposed_size_pct": d.size_pct,
+                    "indicators": self._get_indicators(d.symbol) if d.symbol else {},
+                }
+                opportunities.append(opp)
+
+        if not self._no_ai and (open_positions or opportunities):
+            account = {
+                "balance_usdc": metrics.get("current_balance", 0),
+                "daily_pnl_pct": -metrics.get("daily_drawdown_pct", 0),
+                "total_pnl": metrics.get("current_balance", 0) - metrics.get("peak_balance", 0),
+                "open_position_count": metrics.get("open_positions", 0),
+                "max_positions": metrics.get("max_open_positions", 5),
+            }
+            recent_trades = await self._db.get_recent_trades(20)
+            trade_stats = await self._db.get_trade_stats()
+            account["win_rate"] = trade_stats.get("win_rate", 0)
+            account["consecutive_losses"] = trade_stats.get("consecutive_losses", 0)
+
+            ai_response = await self._advisor.consult(
+                positions=open_positions,
+                opportunities=opportunities,
+                account=account,
+                recent_trades=recent_trades,
+                trade_stats=trade_stats,
+            )
+
+            # Process position actions from AI
+            for pa in ai_response.get("positions", []):
+                if pa["action"] == "CLOSE":
+                    candidates.append(Decision(
+                        action="CLOSE",
+                        symbol=pa["symbol"],
+                        confidence=1.0,
+                        reasoning=f"AI: {pa.get('reasoning', '')}",
+                        strategy_type="ai_advisor",
+                    ))
+                elif pa["action"] == "ADJUST":
+                    pos = next((p for p in open_positions if p["symbol"] == pa["symbol"]), None)
+                    if pos:
+                        adj = pa.get("adjustments", {})
+                        if adj.get("stop_loss") is not None or adj.get("take_profit") is not None:
+                            await self._positions.update_sl_tp(
+                                pos["id"],
+                                stop_loss=adj.get("stop_loss"),
+                                take_profit=adj.get("take_profit"),
+                            )
+                        if adj.get("leverage") is not None:
+                            await self._client.update_leverage(
+                                pa["symbol"],
+                                adj["leverage"],
+                                is_cross=self._settings.hyperliquid.margin_mode == "cross",
+                            )
+                            await self._positions.update_leverage(pos["id"], adj["leverage"])
+
+            # Process opportunity actions from AI
+            approved: list[Decision] = []
+            for oa in ai_response.get("opportunities", []):
+                if oa["action"] == "HOLD":
+                    # Defer the opportunity
+                    orig = next((d for d in candidates if d.symbol == oa["symbol"]), None)
+                    original_action = orig.action if orig else "BUY"
+                    self._advisor.defer(oa["symbol"], original_action, oa.get("defer", {}))
+                    continue
+
+                # BUY or SHORT — find the original candidate and apply adjustments
+                orig = next((d for d in candidates if d.symbol == oa["symbol"]), None)
+                if orig:
+                    adj = oa.get("adjustments", {})
+                    if adj.get("stop_loss") is not None:
+                        orig.stop_loss = adj["stop_loss"]
+                    if adj.get("take_profit") is not None:
+                        orig.take_profit = adj["take_profit"]
+                    if adj.get("size_pct") is not None:
+                        orig.size_pct = adj["size_pct"]
+                    approved.append(orig)
+
+            # Keep AI-approved entries + all CLOSE/SELL decisions
+            candidates = approved + [d for d in candidates if d.action in ("CLOSE", "SELL")]
 
         # 7. Sort: CLOSE first, then entries
         _ACTION_ORDER = {"SELL": 0, "CLOSE": 0, "BUY": 1, "SHORT": 1, "HOLD": 2}
@@ -437,6 +563,78 @@ class Bot:
         except Exception:
             logger.debug("Failed to refresh funding rates", exc_info=True)
 
+    async def _reconcile_positions(self) -> None:
+        """Reconcile position tracker with Hyperliquid on startup.
+
+        Detects:
+        - Positions on HL but not in tracker (orphaned) → import into tracker
+        - Positions in tracker but not on HL (phantom) → mark closed
+        """
+        try:
+            hl_positions = await self._client.get_open_positions()
+            tracker_positions = await self._positions.get_open_positions()
+
+            hl_coins = {p["coin"] for p in hl_positions}
+            tracker_coins = {p["symbol"] for p in tracker_positions}
+
+            # Orphaned: on HL but not tracked → import into tracker
+            orphaned = hl_coins - tracker_coins
+            if orphaned:
+                sl_pct = self._settings.risk.stop_loss_pct
+                tp_pct = self._settings.risk.take_profit_pct
+                for hl_pos in hl_positions:
+                    coin = hl_pos["coin"]
+                    if coin not in orphaned:
+                        continue
+                    direction = hl_pos["direction"]
+                    entry_px = float(hl_pos["entryPx"])
+                    size = float(hl_pos["size"])
+                    leverage = int(hl_pos.get("leverage", self._settings.hyperliquid.default_leverage))
+                    if direction == "SHORT":
+                        sl = entry_px * (1 + sl_pct / 100)
+                        tp = entry_px * (1 - tp_pct / 100)
+                    else:
+                        sl = entry_px * (1 - sl_pct / 100)
+                        tp = entry_px * (1 + tp_pct / 100)
+                    try:
+                        pos_id = await self._positions.open_position(
+                            symbol=coin,
+                            entry_price=entry_px,
+                            quantity=size,
+                            stop_loss=sl,
+                            take_profit=tp,
+                            strategy="reconciled",
+                            direction=direction,
+                            leverage=leverage,
+                        )
+                        logger.info(
+                            "RECONCILE: Imported orphaned %s %s — entry=%.4f size=%.4f SL=%.4f TP=%.4f (id=%d)",
+                            direction, coin, entry_px, size, sl, tp, pos_id,
+                        )
+                    except ValueError:
+                        logger.warning(
+                            "RECONCILE: Skipped duplicate %s %s — already in tracker",
+                            direction, coin,
+                        )
+
+            # Phantom: in tracker but not on HL
+            phantom = tracker_coins - hl_coins
+            for pos in tracker_positions:
+                if pos["symbol"] in phantom:
+                    logger.warning(
+                        "RECONCILE: Closing phantom position #%d %s %s (not on Hyperliquid)",
+                        pos["id"], pos.get("direction", "?"), pos["symbol"],
+                    )
+                    mid = self._market_data.get_mid_price(pos["symbol"])
+                    price = mid or pos["entry_price"]
+                    await self._positions.close_position(pos["id"], price, "reconcile_phantom")
+
+            if not orphaned and not phantom:
+                logger.info("Position reconciliation OK — no discrepancies")
+
+        except Exception:
+            logger.exception("Position reconciliation failed — continuing")
+
     # ── Position SL/TP monitoring ─────────────────────────────
 
     async def _check_positions(self) -> None:
@@ -445,7 +643,7 @@ class Bot:
         if not positions:
             return
 
-        # Get current prices from mid prices (no API call)
+        # Get current prices — prefer WS mid, fallback to REST
         prices: dict[str, float] = {}
         for pos in positions:
             sym = pos["symbol"]
@@ -453,6 +651,14 @@ class Bot:
                 mid = self._market_data.get_mid_price(sym)
                 if mid and mid > 0:
                     prices[sym] = mid
+                else:
+                    try:
+                        rest_price = await self._client.get_price(sym)
+                        if rest_price > 0:
+                            prices[sym] = rest_price
+                            logger.warning("Using REST fallback price for %s (WS stale)", sym)
+                    except Exception:
+                        logger.warning("No price available for %s — SL/TP check skipped", sym)
 
         to_close = await self._positions.check_sl_tp(prices)
 
@@ -519,59 +725,43 @@ class Bot:
         except Exception:
             logger.debug("Failed to write bot_status.json", exc_info=True)
 
-    # ── Snapshot building ────────────────────────────────────
+    # ── Indicator helpers ────────────────────────────────────
 
-    async def _build_snapshot(self, risk_metrics: dict[str, Any]) -> dict[str, Any]:
-        """Assemble full market snapshot for AI review."""
-        balances = {"USDC": risk_metrics.get("current_balance", 0)}
-        recent_trades = await self._db.get_recent_trades(20)
-        trade_stats = await self._db.get_trade_stats()
+    def _get_indicators(self, symbol: str) -> dict[str, Any]:
+        """Get current indicators for a symbol from strategy state."""
+        state = self._strategy.get_state()
+        indicators: dict[str, Any] = {}
 
-        open_positions = await self._positions.get_open_positions()
-        now_utc = datetime.now(timezone.utc)
-        position_symbols: set[str] = set()
-        for pos in open_positions:
-            position_symbols.add(pos["symbol"])
-            direction = pos.get("direction", "LONG")
-            mid = self._market_data.get_mid_price(pos["symbol"])
-            if mid and mid > 0:
-                pos["current_price"] = mid
-                if direction == "LONG":
-                    pos["unrealized_pnl"] = round((mid - pos["entry_price"]) * pos["quantity"], 4)
-                    pos["pnl_pct"] = round((mid - pos["entry_price"]) / pos["entry_price"] * 100, 2)
-                else:
-                    pos["unrealized_pnl"] = round((pos["entry_price"] - mid) * pos["quantity"], 4)
-                    pos["pnl_pct"] = round((pos["entry_price"] - mid) / pos["entry_price"] * 100, 2)
-            if pos.get("opened_at"):
-                opened = datetime.fromisoformat(pos["opened_at"].replace("Z", "+00:00"))
-                age_min = (now_utc - opened).total_seconds() / 60
-                pos["age_minutes"] = round(age_min, 1)
+        # Try direct signals (single strategy)
+        signals = state.get("signals", {})
+        if symbol in signals:
+            sig = signals[symbol]
+            indicators = {
+                "rsi_15m": sig.get("rsi"),
+                "rsi_1h": sig.get("rsi_1h"),
+                "trend": sig.get("trend"),
+                "bb_upper": sig.get("bb_upper"),
+                "bb_lower": sig.get("bb_lower"),
+                "volume_ratio": sig.get("volume_ratio"),
+            }
+            return {k: v for k, v in indicators.items() if v is not None}
 
-        # Only include coins with active signals or open positions
-        strategy_state = self._strategy.get_state()
-        signal_symbols: set[str] = set()
-        # Collect signal symbols from strategy state (varies by strategy type)
-        for key in ("oversold", "overbought", "bullish_divergences", "bearish_divergences"):
-            signal_symbols.update(strategy_state.get(key, []))
-        # Also check sub_strategies if multi
-        for sub in strategy_state.get("sub_strategies", {}).values():
-            for key in ("oversold", "overbought", "bullish_divergences", "bearish_divergences"):
-                signal_symbols.update(sub.get(key, []))
-        snapshot_coins = sorted(signal_symbols | position_symbols | set(CORE_COINS))
+        # Try sub_strategies (multi strategy)
+        for sub in state.get("sub_strategies", {}).values():
+            sub_signals = sub.get("signals", {})
+            if symbol in sub_signals:
+                sig = sub_signals[symbol]
+                indicators = {
+                    "rsi_15m": sig.get("rsi"),
+                    "rsi_1h": sig.get("rsi_1h"),
+                    "trend": sig.get("trend"),
+                    "bb_upper": sig.get("bb_upper"),
+                    "bb_lower": sig.get("bb_lower"),
+                    "volume_ratio": sig.get("volume_ratio"),
+                }
+                return {k: v for k, v in indicators.items() if v is not None}
 
-        snapshot = await self._market_data.generate_snapshot(
-            coins=snapshot_coins,
-            balances=balances,
-            open_positions=open_positions,
-            recent_trades=recent_trades,
-            trade_stats=trade_stats,
-        )
-
-        snapshot["risk_metrics"] = risk_metrics
-        snapshot["strategies"] = strategy_state
-        snapshot["total_coins_monitored"] = len(self._active_coins)
-
-        return snapshot
+        return indicators
 
     # ── Order execution ──────────────────────────────────────
 
@@ -688,13 +878,21 @@ class Bot:
             coin=symbol, is_buy=is_buy, size=qty,
         )
 
-        # Record position
-        await self._positions.open_position(
-            symbol=symbol, entry_price=price, quantity=qty,
-            stop_loss=decision.stop_loss, take_profit=decision.take_profit,
-            strategy=decision.strategy_type or "mean_reversion",
-            direction=direction, leverage=leverage,
-        )
+        # Record position — CRITICAL: if this fails, position is live on HL but invisible
+        try:
+            await self._positions.open_position(
+                symbol=symbol, entry_price=price, quantity=qty,
+                stop_loss=decision.stop_loss, take_profit=decision.take_profit,
+                strategy=decision.strategy_type or "mean_reversion",
+                direction=direction, leverage=leverage,
+            )
+        except Exception:
+            logger.critical(
+                "POSITION TRACKER FAILED after order placed! %s %s qty=%.6f is LIVE on HL but untracked",
+                action_name, symbol, qty,
+            )
+            raise
+
         await self._db.insert_trade(
             symbol=symbol, side=action_name, price=price,
             quantity=qty, strategy=decision.strategy_type or "mean_reversion",
@@ -713,6 +911,10 @@ class Bot:
         """Close a position on Hyperliquid. Returns PnL."""
         symbol = decision.symbol
         pos = await self._positions.get_position_for_symbol(symbol)
+
+        if not pos:
+            logger.warning("CLOSE %s: no position in tracker — skipping exchange call", symbol)
+            return None
 
         # Close via SDK market_close
         await self._client.close_position(symbol)

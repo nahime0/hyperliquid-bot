@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.ai_engine.types import Decision
+from core.types import Decision
 from strategies.base import Strategy
 from utils.logger import get_logger
 
@@ -122,7 +122,6 @@ class MultiStrategy(Strategy):
                     order_type=best.order_type,
                     stop_loss=best.stop_loss,
                     take_profit=best.take_profit,
-                    tier=best.tier,
                 )
 
             merged_entries.append(best)

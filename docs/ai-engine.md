@@ -1,137 +1,177 @@
-# AI Decision Engine
+# AI Advisor (Claude Code CLI)
 
 ## Overview
 
-Il motore AI opera in **modalita' review**: le decisioni vengono generate autonomamente dalle regole codificate (Mean Reversion), e l'AI interviene come **reviewer opzionale** con potere di veto. Questo approccio ibrido bilancia velocita' (regole) e intelligenza (AI).
+Il bot usa un **AI advisor opzionale** basato su Claude Code CLI. Le decisioni vengono generate autonomamente dalle strategie (Mean Reversion, RSI Divergence), e l'AI interviene come **advisor** con capacita' di:
+
+- **Approvare** opportunita' di trading (con possibili aggiustamenti)
+- **Deferire** opportunita' (aspettare N cicli o un certo prezzo)
+- **Chiudere** posizioni aperte
+- **Aggiustare** SL/TP/leverage su posizioni aperte
 
 Il flag `--no-ai` disabilita completamente l'AI, lasciando il bot in modalita' pure rule-based.
 
-## Architettura 3-Tier
+## Architettura
 
-### Tier 1: PreScreen (`core/ai_engine/prescreen.py`)
+**Una singola chiamata CLI per ciclo** — semplice e affidabile.
 
-**Costo: $0 | Latenza: 0ms**
-
-Regole deterministiche che filtrano candidati prima dell'AI:
-- Rate limit (evita chiamate troppo frequenti)
-- Snapshot hash identico (nessun cambiamento)
-- Balance insufficiente
-- Max posizioni raggiunte
-- 5 perdite consecutive
-
-### Tier 2: Haiku Screening (`core/ai_engine/engine.py`)
-
-**Costo: ~$0.001/call | Latenza: ~2s**
-
-Modello: `claude-haiku-4-5-20251001` (configurabile)
-
-Riceve uno snapshot condensato del mercato e decide se l'opportunita' merita escalation:
-- **HOLD** → veto (risparmia costi Tier 3)
-- **BUY/SHORT con confidence < 0.7** → HOLD forzato
-- **BUY/SHORT con confidence >= 0.7** → escalation a Tier 3
-
-Max 3 escalation per ciclo (per controllare i costi).
-
-### Tier 3: Sonnet Analysis (`core/ai_engine/engine.py`)
-
-**Costo: ~$0.01-0.03/call | Latenza: ~10-15s**
-
-Modello: `claude-sonnet-4-5-20250929` (configurabile)
-
-Riceve il contesto completo:
-- Market snapshot con indicatori per ogni coin
-- Posizioni aperte con PnL
-- Storico ultimi 20 trade
-- Trade stats (win rate, profit factor)
-- Risk metrics (drawdown, kill switch status)
-
-Produce una decisione strutturata con:
-- Action (BUY/SHORT/CLOSE/HOLD)
-- Symbol, confidence, reasoning
-- Stop loss, take profit suggeriti
-- Size suggerita
-
-## Review Mode
-
-Quando l'AI e' abilitata, opera in **review mode**:
-
-1. La strategia genera candidate decisions (BUY, SHORT, CLOSE)
-2. L'AI Engine riceve le candidate + market snapshot
-3. L'AI puo':
-   - **Confermare** la decisione (pass-through)
-   - **Modificare** parametri (SL, TP, size)
-   - **Vetare** la decisione (convertirla in HOLD)
-4. Le decisioni passano poi al Risk Manager
-
-## Backend Pluggabili
-
-L'engine supporta backend multipli per screening e analisi:
-
-| Backend | Descrizione |
-|---|---|
-| `anthropic_sdk` | SDK Anthropic diretto (default) |
-| `claude_cli` | Claude Code CLI (`claude -p`) |
-| `gemini_cli` | Gemini CLI |
-| `codex_cli` | Codex CLI |
-
-Configurazione:
-```env
-AI_SCREENING_BACKEND=anthropic_sdk
-AI_SCREENING_MODEL=claude-haiku-4-5-20251001
-AI_ANALYSIS_BACKEND=anthropic_sdk
-AI_ANALYSIS_MODEL=claude-sonnet-4-5-20250929
+```
+Strategie generano candidates
+        |
+        v
+Check deferred (condizioni soddisfatte?)
+        |
+        v
+Build JSON payload (positions + opportunities + account + history)
+        |
+        v
+claude -p <payload> --json-schema <schema> --output-format json --model opus
+        |
+        v
+Parse structured_output
+        |
+        v
+Process: CLOSE/ADJUST positions, approve/defer opportunities
+        |
+        v
+Risk validate → Execute
 ```
 
-## Schema JSON
+Se non ci sono posizioni aperte E nessuna opportunita', la chiamata AI viene saltata.
+Su errore o timeout: log warning, il bot continua autonomamente.
 
-### Decisione singola (`schemas/decision.json`)
+## Invocazione CLI
+
+```bash
+claude -p "<json_payload>" \
+    --no-session-persistence \
+    --model opus \
+    --output-format json \
+    --json-schema '<schema>' \
+    --system-prompt-file prompts/ai_advisor.md \
+    --allowedTools "" \
+    --max-turns 1
+```
+
+- `--json-schema` enforce la struttura dell'output
+- `--allowedTools ""` disabilita tool (pura inferenza, nessun file read)
+- `--max-turns 1` previene loop agentici
+- Timeout: 120s (configurabile via `AI_TIMEOUT`)
+
+## Input JSON
 
 ```json
 {
-  "action": "BUY | SHORT | SELL | HOLD | CLOSE",
-  "symbol": "ETH",
-  "size_pct": 5.0,
-  "order_type": "MARKET",
-  "limit_price": 2000.50,
-  "stop_loss": 1980.00,
-  "take_profit": 2030.75,
-  "confidence": 0.85,
-  "reasoning": "Spiegazione dettagliata...",
-  "strategy_type": "mean_reversion | momentum | other"
+  "positions": [
+    {
+      "symbol": "ETH", "direction": "SHORT",
+      "entry_price": 1976.65, "current_price": 1980.00,
+      "pnl_pct": -0.17, "unrealized_pnl": -4.55,
+      "stop_loss": 1996.42, "take_profit": 1947.00,
+      "age_minutes": 120, "strategy": "mean_reversion",
+      "leverage": 2, "quantity": 1.36,
+      "indicators": { "rsi_15m": 45.2, "rsi_1h": 52.1, "trend": "BEARISH", "bb_upper": 2010, "bb_lower": 1950, "volume_ratio": 1.3 }
+    }
+  ],
+  "opportunities": [
+    {
+      "symbol": "BTC", "proposed_action": "SHORT",
+      "confidence": 0.65, "strategy": "mean_reversion",
+      "reasoning": "RSI(14)=78 overbought, price at upper BB, bearish trend",
+      "current_price": 45000, "proposed_stop_loss": 45450,
+      "proposed_take_profit": 44325, "proposed_size_pct": 8.0,
+      "indicators": { "rsi_15m": 78.3, "rsi_1h": 65.0, "trend": "BEARISH" }
+    }
+  ],
+  "account": {
+    "balance_usdc": 1000, "daily_pnl_pct": -0.5,
+    "total_pnl": 50, "win_rate": 0.65,
+    "open_position_count": 1, "max_positions": 5,
+    "consecutive_losses": 0
+  },
+  "recent_trades": [ ... ],
+  "trade_stats": { "total_trades": 42, "win_rate": 0.62, "avg_win": 8.5, "avg_loss": -5.2 }
 }
 ```
 
-Campi required: `action`, `reasoning`, `confidence`.
+## Output JSON (enforced by `--json-schema`)
 
-### Screening (`schemas/screening_decision.json`)
+```json
+{
+  "positions": [
+    {
+      "symbol": "ETH",
+      "action": "HOLD",
+      "reasoning": "Short in profit territory, trailing stop will manage exit"
+    }
+  ],
+  "opportunities": [
+    {
+      "symbol": "BTC",
+      "action": "SHORT",
+      "adjustments": { "stop_loss": 45200, "size_pct": 6.0 },
+      "reasoning": "Good setup but reducing size due to existing ETH short exposure"
+    }
+  ]
+}
+```
 
-Schema semplificato per il Tier 2 (Haiku).
+### Azioni per posizioni
 
-### Review (`schemas/review_decision.json`)
+| Azione | Effetto |
+|---|---|
+| `HOLD` | Nessuna azione (trailing stop/time stop continuano) |
+| `CLOSE` | Chiusura immediata della posizione |
+| `ADJUST` | Modifica SL, TP, o leverage tramite `adjustments` |
 
-Schema per la modalita' review.
+### Azioni per opportunita'
 
-## Prompt Templates
+| Azione | Effetto |
+|---|---|
+| `BUY`/`SHORT` | Approva l'entry (con eventuali `adjustments`) |
+| `HOLD` | Deferisce l'entry. Usa `defer` per condizioni |
 
-### `prompts/trading_decision.md` (Tier 3)
+### Condizioni di defer
 
-Template completo per analisi profonda. Include:
-1. Ruolo del trader quantitativo
-2. Regole di risk management
-3. Market snapshot completo
-4. Storico trade recenti
-5. Istruzioni per output strutturato
+```json
+{
+  "defer": {
+    "wait_cycles": 5,
+    "wait_until_price_above": 45500,
+    "wait_until_price_below": 44000
+  }
+}
+```
 
-### `prompts/screening_decision.md` (Tier 2)
+- `wait_cycles`: rievaluta dopo N cicli (~60s ciascuno)
+- `wait_until_price_above/below`: rievaluta quando il prezzo raggiunge il livello
 
-Template condensato per screening rapido. Focalizzato su:
-- Identificazione rapida di opportunita'
-- Filtro false signals
-- Decisione escala/non-escala
+Le opportunita' deferred sono in-memory (cancellate al restart).
 
-### `prompts/review_decision.md` (Review)
+## System Prompt
 
-Template per review di decisioni generate dalle regole.
+Il file `prompts/ai_advisor.md` contiene le istruzioni per l'AI advisor, tra cui:
+
+- Ruolo e responsabilita'
+- Linee guida per decisioni su posizioni e opportunita'
+- Regole di risk management
+- Criteri per defer vs approva
+
+## Schema JSON
+
+Il file `schemas/ai_advisor_output.json` definisce la struttura dell'output enforced da `--json-schema`.
+
+## Configurazione
+
+| Variabile | Default | Descrizione |
+|---|---|---|
+| `AI_DECISION_INTERVAL` | `60` | Secondi tra un ciclo e l'altro |
+| `AI_MODEL` | `opus` | Modello Claude Code (`opus`, `sonnet`, `haiku`) |
+| `AI_TIMEOUT` | `120` | Timeout per la chiamata CLI (secondi) |
+| `AI_MIN_CONFIDENCE` | `0.6` | Sotto questa soglia → HOLD forzato |
+| `AI_FALLBACK_ON_ERROR` | `HOLD` | Azione di default se l'AI non risponde |
+| `AI_LOG_REASONING` | `true` | Logga il reasoning dell'AI |
+| `AI_MAX_SPREAD_PCT` | `0.5` | Spread massimo per screening |
 
 ## Decision Dataclass
 
@@ -149,32 +189,13 @@ class Decision:
     take_profit: float | None
     strategy_type: str | None
     raw_response: str | None
-    tier: Tier            # PRESCREEN, HAIKU, OPUS, FALLBACK
 ```
 
-## Tier Enum
+Definita in `core/types.py`.
 
-```python
-class Tier(enum.Enum):
-    PRESCREEN = "prescreen"
-    HAIKU = "haiku"
-    OPUS = "opus"
-    FALLBACK = "fallback"
-```
+## Costi
 
-## Costi e ottimizzazione
+L'AI advisor usa **una singola chiamata CLI per ciclo** al modello configurato.
+La chiamata viene saltata se non ci sono posizioni ne' opportunita'.
 
-| Strategia | Effetto |
-|---|---|
-| PreScreen (Tier 1) | Filtra ~70% dei cicli gratuitamente |
-| Haiku (Tier 2) | Filtra ~90% dei candidati a ~$0.001 |
-| Max escalation limit | Max 3 escalation a Tier 3 per ciclo |
-| Snapshot hash dedup | Evita ri-analisi di snapshot identici |
-| Rate limit | Impone intervallo minimo tra chiamate |
-
-Stima costi giornalieri con intervallo 60s (1.440 cicli/giorno):
-- Mercato calmo: $0.50-$1.00
-- Mercato attivo: $2.00-$5.00
-- Max teorico: $15-$40
-
-Ogni decisione viene salvata nel DB con `cost_usd` per tracking.
+Con `--no-ai`, il costo AI e' zero (pure rule-based).

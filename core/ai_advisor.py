@@ -1,0 +1,284 @@
+"""AI Advisor — Claude Code CLI integration for trading decisions.
+
+Single CLI call per cycle. The AI acts as an advisor that reviews open positions
+and proposed opportunities, responding with structured JSON.
+
+Invocation:
+    claude -p <payload_file> \
+        --no-session-persistence \
+        --model <model> \
+        --output-format json \
+        --json-schema <schema> \
+        --system-prompt-file prompts/ai_advisor.md \
+        --allowedTools "" \
+        --max-turns 2
+
+On error: logs a warning and returns empty response (bot continues autonomously).
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+from utils.logger import get_logger
+
+logger = get_logger(__name__)
+
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+@dataclass
+class DeferredOpportunity:
+    """An opportunity the AI asked to re-evaluate later."""
+
+    symbol: str
+    original_action: str  # BUY or SHORT
+    deferred_at_cycle: int
+    conditions: dict[str, Any] = field(default_factory=dict)
+    # conditions may include: wait_cycles, wait_until_price_above, wait_until_price_below
+
+
+class AIAdvisor:
+    """Claude Code CLI advisor for trading decisions."""
+
+    def __init__(
+        self,
+        *,
+        model: str = "opus",
+        timeout: int = 120,
+    ) -> None:
+        self._model = model
+        self._timeout = timeout
+        self._schema_path = _PROJECT_ROOT / "schemas" / "ai_advisor_output.json"
+        self._prompt_path = _PROJECT_ROOT / "prompts" / "ai_advisor.md"
+        self._cycle_count: int = 0
+
+        # Deferred opportunities (in-memory, transient)
+        self._deferred: dict[str, DeferredOpportunity] = {}
+
+    @property
+    def deferred_symbols(self) -> set[str]:
+        """Symbols currently deferred."""
+        return set(self._deferred.keys())
+
+    def set_cycle(self, cycle: int) -> None:
+        """Update the current cycle count (called from main loop)."""
+        self._cycle_count = cycle
+
+    # ── Deferred opportunity management ───────────────────────
+
+    def defer(self, symbol: str, original_action: str, conditions: dict[str, Any]) -> None:
+        """Defer an opportunity for later re-evaluation."""
+        self._deferred[symbol] = DeferredOpportunity(
+            symbol=symbol,
+            original_action=original_action,
+            deferred_at_cycle=self._cycle_count,
+            conditions=conditions,
+        )
+        logger.info(
+            "Deferred %s %s — conditions: %s",
+            original_action, symbol, conditions,
+        )
+
+    def remove_deferred(self, symbol: str) -> None:
+        """Remove a deferred opportunity (signal gone or conditions met)."""
+        if symbol in self._deferred:
+            del self._deferred[symbol]
+            logger.debug("Removed deferred opportunity for %s", symbol)
+
+    def check_deferred(self, mid_prices: dict[str, float]) -> list[str]:
+        """Check which deferred opportunities have met their conditions.
+
+        Returns list of symbols ready for re-evaluation.
+        """
+        ready: list[str] = []
+        to_remove: list[str] = []
+
+        for symbol, opp in self._deferred.items():
+            cond = opp.conditions
+            met = False
+
+            # Check wait_cycles
+            wait_cycles = cond.get("wait_cycles")
+            if wait_cycles is not None:
+                elapsed = self._cycle_count - opp.deferred_at_cycle
+                if elapsed >= wait_cycles:
+                    met = True
+
+            # Check price conditions
+            price = mid_prices.get(symbol)
+            if price is not None:
+                above = cond.get("wait_until_price_above")
+                if above is not None and price >= above:
+                    met = True
+
+                below = cond.get("wait_until_price_below")
+                if below is not None and price <= below:
+                    met = True
+
+            # No conditions at all → ready immediately
+            if not cond:
+                met = True
+
+            if met:
+                ready.append(symbol)
+                to_remove.append(symbol)
+
+        for symbol in to_remove:
+            del self._deferred[symbol]
+            logger.info("Deferred opportunity %s conditions met — re-evaluating", symbol)
+
+        return ready
+
+    # ── Main advisor call ─────────────────────────────────────
+
+    async def consult(
+        self,
+        positions: list[dict[str, Any]],
+        opportunities: list[dict[str, Any]],
+        account: dict[str, Any],
+        recent_trades: list[dict[str, Any]] | None = None,
+        trade_stats: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Call Claude Code CLI with the current state and return structured advice.
+
+        Returns dict with "positions" and "opportunities" keys, each a list of actions.
+        On error, returns empty lists.
+        """
+        payload = {
+            "positions": positions,
+            "opportunities": opportunities,
+            "account": account,
+        }
+        if recent_trades:
+            payload["recent_trades"] = recent_trades
+        if trade_stats:
+            payload["trade_stats"] = trade_stats
+
+        payload_json = json.dumps(payload, default=str)
+
+        try:
+            result = await asyncio.wait_for(
+                self._invoke_cli(payload_json),
+                timeout=self._timeout,
+            )
+            return result
+        except asyncio.TimeoutError:
+            logger.warning("AI advisor timed out after %ds — continuing autonomously", self._timeout)
+            return {"positions": [], "opportunities": []}
+        except Exception:
+            logger.warning("AI advisor error — continuing autonomously", exc_info=True)
+            return {"positions": [], "opportunities": []}
+
+    async def _invoke_cli(self, payload_json: str) -> dict[str, Any]:
+        """Invoke claude CLI and parse the structured output."""
+        schema_content = self._schema_path.read_text()
+
+        # Write payload to a temp file to avoid shell argument length limits
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", prefix="ai_advisor_", delete=False,
+            dir="/tmp/claude",
+        ) as f:
+            f.write(payload_json)
+            payload_file = f.name
+
+        try:
+            # Build the prompt that references the payload
+            prompt = f"Review the following trading state and provide your decisions:\n\n{payload_json}"
+
+            cmd = [
+                "claude",
+                "-p", prompt,
+                "--no-session-persistence",
+                "--model", self._model,
+                "--output-format", "json",
+                "--json-schema", schema_content,
+                "--system-prompt-file", str(self._prompt_path),
+                "--allowedTools", "",
+                "--max-turns", "2",
+            ]
+
+            logger.debug("Invoking AI advisor CLI (model=%s)", self._model)
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await proc.communicate()
+
+            if proc.returncode != 0:
+                stderr_text = stderr.decode(errors="replace").strip()
+                logger.warning(
+                    "AI advisor CLI exited with code %d: %s",
+                    proc.returncode, stderr_text[:500],
+                )
+                return {"positions": [], "opportunities": []}
+
+            output = stdout.decode(errors="replace").strip()
+            if not output:
+                logger.warning("AI advisor returned empty output")
+                return {"positions": [], "opportunities": []}
+
+            # Parse the JSON output
+            response = json.loads(output)
+
+            # claude --output-format json wraps result in {"result": ..., "structured_output": ...}
+            # The structured_output contains our schema-validated response
+            if isinstance(response, dict):
+                if "structured_output" in response:
+                    result = response["structured_output"]
+                elif "result" in response:
+                    # Try to parse result as JSON (might be a JSON string)
+                    result_val = response["result"]
+                    if isinstance(result_val, str):
+                        try:
+                            result = json.loads(result_val)
+                        except json.JSONDecodeError:
+                            result = response
+                    elif isinstance(result_val, dict):
+                        result = result_val
+                    else:
+                        result = response
+                else:
+                    result = response
+            else:
+                result = response
+
+            # Validate structure
+            if not isinstance(result, dict):
+                logger.warning("AI advisor returned non-dict: %s", type(result))
+                return {"positions": [], "opportunities": []}
+
+            positions_resp = result.get("positions", [])
+            opportunities_resp = result.get("opportunities", [])
+
+            logger.info(
+                "AI advisor responded: %d position actions, %d opportunity actions",
+                len(positions_resp), len(opportunities_resp),
+            )
+
+            # Log reasoning
+            for pa in positions_resp:
+                logger.info(
+                    "  Position %s: %s — %s",
+                    pa.get("symbol"), pa.get("action"), pa.get("reasoning", ""),
+                )
+            for oa in opportunities_resp:
+                logger.info(
+                    "  Opportunity %s: %s — %s",
+                    oa.get("symbol"), oa.get("action"), oa.get("reasoning", ""),
+                )
+
+            return result
+
+        finally:
+            # Clean up temp file
+            try:
+                Path(payload_file).unlink(missing_ok=True)
+            except Exception:
+                pass

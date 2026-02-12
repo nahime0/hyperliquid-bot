@@ -21,38 +21,16 @@ Tutte le configurazioni sono gestite tramite variabili d'ambiente caricate da `.
 - Testnet: `https://api.hyperliquid-testnet.xyz`
 - Mainnet: `https://api.hyperliquid.xyz`
 
-### AI Decision Engine
+### AI Advisor (Claude Code CLI)
 
 | Variabile | Default | Tipo | Descrizione |
 |---|---|---|---|
 | `AI_DECISION_INTERVAL` | `60` | int | Secondi tra un ciclo decisionale e l'altro. |
-| `AI_TIMEOUT` | `120` | int | Timeout globale per l'AI (secondi). |
+| `AI_MODEL` | `opus` | str | Modello Claude da usare (opus, haiku, sonnet). |
+| `AI_TIMEOUT` | `120` | int | Timeout per la chiamata CLI (secondi). |
 | `AI_MIN_CONFIDENCE` | `0.6` | float | Sotto questa soglia, l'azione e' forzata a HOLD. |
 | `AI_FALLBACK_ON_ERROR` | `HOLD` | str | Azione di default se l'AI non risponde. |
 | `AI_LOG_REASONING` | `true` | bool | Salva il reasoning completo di ogni decisione nel DB. |
-
-### Anthropic SDK
-
-| Variabile | Default | Tipo | Descrizione |
-|---|---|---|---|
-| `ANTHROPIC_API_KEY` | `""` | str | Chiave API Anthropic. Richiesta per AI. |
-| `AI_HAIKU_MODEL` | `claude-haiku-4-5-20251001` | str | Modello per Tier 2 (screening). |
-| `AI_OPUS_MODEL` | `claude-sonnet-4-5-20250929` | str | Modello per Tier 3 (analisi profonda). |
-| `AI_HAIKU_TIMEOUT` | `15` | int | Timeout Haiku in secondi. |
-| `AI_OPUS_TIMEOUT` | `60` | int | Timeout Sonnet in secondi. |
-| `AI_HAIKU_HOLD_CONFIDENCE` | `0.7` | float | Se Haiku BUY con confidence < questa soglia, forza HOLD. |
-| `AI_MAX_SPREAD_PCT` | `0.5` | float | Se tutti gli spread superano questa %, PreScreen blocca. |
-
-### Multi-backend AI (avanzato)
-
-| Variabile | Default | Tipo | Descrizione |
-|---|---|---|---|
-| `AI_SCREENING_BACKEND` | `anthropic_sdk` | str | Backend per Tier 2. Opzioni: `anthropic_sdk`, `claude_cli`, `gemini_cli`, `codex_cli`. |
-| `AI_SCREENING_MODEL` | `""` | str | Modello override per screening. Se vuoto, usa `AI_HAIKU_MODEL`. |
-| `AI_SCREENING_TIMEOUT` | `0` | int | Timeout override. Se 0, usa `AI_HAIKU_TIMEOUT`. |
-| `AI_ANALYSIS_BACKEND` | `anthropic_sdk` | str | Backend per Tier 3. |
-| `AI_ANALYSIS_MODEL` | `""` | str | Modello override per analisi. Se vuoto, usa `AI_OPUS_MODEL`. |
-| `AI_ANALYSIS_TIMEOUT` | `0` | int | Timeout override. Se 0, usa `AI_OPUS_TIMEOUT`. |
 
 ### Risk Management
 
@@ -63,7 +41,10 @@ Tutte le configurazioni sono gestite tramite variabili d'ambiente caricate da `.
 | `TAKE_PROFIT_PCT` | `1.5` | float | Take profit automatico (%). |
 | `MAX_DAILY_DRAWDOWN_PCT` | `5.0` | float | Drawdown giornaliero max. Supera → pausa fino a mezzanotte UTC. |
 | `MAX_TOTAL_DRAWDOWN_PCT` | `15.0` | float | Drawdown totale max dal peak. Supera → kill switch. |
-| `MAX_OPEN_POSITIONS` | `5` | int | Max posizioni aperte contemporanee. |
+| `MAX_OPEN_POSITIONS` | `5` | int | Max posizioni aperte (hard cap per dynamic, valore fisso se static). |
+| `DYNAMIC_POSITIONS` | `true` | bool | Scala max posizioni con balance (1 slot ogni USDC_PER_POSITION). |
+| `USDC_PER_POSITION` | `200.0` | float | USDC necessari per ogni slot di posizione. |
+| `AUTO_TAKE_PROFIT` | `false` | bool | Se true, genera TP automatico. Se false, il trailing stop gestisce i profitti. |
 | `MIN_BALANCE_USDC` | `50.0` | float | Balance minimo. Sotto → kill switch. |
 | `MIN_HOLDING_MINUTES` | `15` | int | Tempo minimo di holding prima che l'AI possa chiudere una posizione. |
 
@@ -125,13 +106,12 @@ Settings
 │   ├── default_leverage, margin_mode
 │   └── max_funding_rate
 ├── ai: AIConfig
-│   ├── decision_interval, timeout, min_confidence
-│   ├── anthropic_api_key
-│   ├── haiku_model, opus_model, timeouts
-│   └── screening/analysis backend config
+│   ├── decision_interval, model, timeout
+│   ├── min_confidence, fallback_on_error
+│   └── log_reasoning
 ├── risk: RiskConfig
-│   ├── max_trade_pct, stop_loss_pct, take_profit_pct
-│   ├── drawdown limits, position limits
+│   ├── max_trade_pct, stop_loss_pct, take_profit_pct, auto_take_profit
+│   ├── drawdown limits, position limits (dynamic/static)
 │   ├── trailing stop parameters
 │   ├── time stop parameters
 │   └── cooldown parameters

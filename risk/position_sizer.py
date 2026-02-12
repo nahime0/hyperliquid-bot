@@ -26,7 +26,7 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# Minimum size worth placing (USDC) — Hyperliquid min notional ~$10
+# Minimum order size (USDC) — Hyperliquid min notional ~$10
 MIN_ORDER_USDC = 10.0
 
 # Cold-start: fixed percentage of bankroll when trade history is thin

@@ -38,7 +38,7 @@ import pandas as pd
 import ta as ta_lib
 
 from config.settings import RiskConfig
-from core.ai_engine.types import Decision, Tier
+from core.types import Decision
 from core.market_data import MarketData
 from risk.position_tracker import PositionTracker
 from strategies.base import Strategy
@@ -93,7 +93,7 @@ class MeanReversionStrategy(Strategy):
         cooldown: CooldownTracker,
         position_tracker: PositionTracker,
         risk_config: RiskConfig,
-        pairs: list[str] | None = None,
+        coins: list[str] | None = None,
         interval: str = "15m",
     ) -> None:
         self._md = market_data
@@ -101,16 +101,16 @@ class MeanReversionStrategy(Strategy):
         self._cooldown = cooldown
         self._positions = position_tracker
         self._rc = risk_config
-        self._pairs = pairs or []
+        self._coins = coins or []
         self._interval = interval
         self._signals: dict[str, Signal] = {}
         self._funding_rates: dict[str, float] = {}
         self._max_funding_rate: float = 0.0005  # default, overridden from settings
 
-    def set_pairs(self, pairs: list[str]) -> None:
+    def set_coins(self, coins: list[str]) -> None:
         """Update the list of coins to scan (for dynamic discovery)."""
-        self._pairs = pairs
-        logger.info("MeanReversion pairs updated: %d coins", len(pairs))
+        self._coins = coins
+        logger.info("MeanReversion coins updated: %d", len(coins))
 
     def set_funding_rates(self, rates: dict[str, float]) -> None:
         """Update cached funding rates (from main loop)."""
@@ -125,7 +125,7 @@ class MeanReversionStrategy(Strategy):
     async def start(self) -> None:
         logger.info(
             "MeanReversionStrategy started — scanning %d coins on %s",
-            len(self._pairs), self._interval,
+            len(self._coins), self._interval,
         )
 
     async def stop(self) -> None:
@@ -136,7 +136,7 @@ class MeanReversionStrategy(Strategy):
 
     async def update(self) -> None:
         """Scan all coins and update signals."""
-        tasks = [self._scan_pair(sym) for sym in self._pairs]
+        tasks = [self._scan_pair(sym) for sym in self._coins]
         await asyncio.gather(*tasks)
 
     async def _scan_pair(self, symbol: str) -> None:
@@ -266,8 +266,8 @@ class MeanReversionStrategy(Strategy):
             if exit_decision:
                 decisions.append(exit_decision)
 
-        # ── LONG ENTRY checks ──
-        for symbol in self._pairs:
+        # ── ENTRY checks (LONG or SHORT, never both per symbol) ──
+        for symbol in self._coins:
             if symbol in open_symbols:
                 continue
 
@@ -278,15 +278,7 @@ class MeanReversionStrategy(Strategy):
             entry_decision = self._check_long_entry(symbol, sig)
             if entry_decision:
                 decisions.append(entry_decision)
-
-        # ── SHORT ENTRY checks ──
-        for symbol in self._pairs:
-            if symbol in open_symbols:
-                continue
-
-            sig = self._signals.get(symbol)
-            if not sig:
-                continue
+                continue  # skip SHORT check — one direction per coin per cycle
 
             entry_decision = self._check_short_entry(symbol, sig)
             if entry_decision:
@@ -314,7 +306,6 @@ class MeanReversionStrategy(Strategy):
             reasoning=f"[MeanRev LONG EXIT] {symbol}: {', '.join(reasons)}",
             strategy_type="mean_reversion",
             order_type="MARKET",
-            tier=Tier.FALLBACK,
         )
 
     def _check_short_exit(self, symbol: str, sig: Signal) -> Decision | None:
@@ -337,7 +328,6 @@ class MeanReversionStrategy(Strategy):
             reasoning=f"[MeanRev SHORT EXIT] {symbol}: {', '.join(reasons)}",
             strategy_type="mean_reversion",
             order_type="MARKET",
-            tier=Tier.FALLBACK,
         )
 
     def _check_long_entry(self, symbol: str, sig: Signal) -> Decision | None:
@@ -376,7 +366,6 @@ class MeanReversionStrategy(Strategy):
             strategy_type="mean_reversion",
             size_pct=10.0,
             order_type="MARKET",
-            tier=Tier.FALLBACK,
         )
 
     def _check_short_entry(self, symbol: str, sig: Signal) -> Decision | None:
@@ -415,7 +404,6 @@ class MeanReversionStrategy(Strategy):
             strategy_type="mean_reversion",
             size_pct=10.0,
             order_type="MARKET",
-            tier=Tier.FALLBACK,
         )
 
     # ── State (for snapshot / dashboard) ──────────────────────

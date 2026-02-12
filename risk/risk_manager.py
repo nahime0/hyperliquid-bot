@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from config.settings import RiskConfig
-from core.ai_engine.types import Decision
+from core.types import Decision
 from core.client import HyperliquidClient
 from data.db import Database
 from risk.position_sizer import PositionSizer, SizeResult
@@ -184,11 +184,12 @@ class RiskManager:
         if not decision.symbol:
             return self._block(decision, "No symbol specified")
 
-        # ── Max open positions ──
-        if decision.action in ("BUY", "SHORT") and self._open_position_count >= self._config.max_open_positions:
+        # ── Max open positions (dynamic or static) ──
+        max_pos = self._effective_max_positions()
+        if decision.action in ("BUY", "SHORT") and self._open_position_count >= max_pos:
             return self._block(
                 decision,
-                f"Max open positions reached ({self._open_position_count}/{self._config.max_open_positions})",
+                f"Max open positions reached ({self._open_position_count}/{max_pos})",
             )
 
         # ── No duplicate positions on same symbol ──
@@ -236,16 +237,18 @@ class RiskManager:
                     return self._block(decision, "Cannot determine price for stop loss")
 
             if decision.action == "BUY":
-                # LONG: SL below, TP above
+                # LONG: SL below, TP above (if enabled)
                 decision.stop_loss = round(price * (1 - self._config.stop_loss_pct / 100), 8)
-                decision.take_profit = round(price * (1 + self._config.take_profit_pct / 100), 8)
+                if self._config.auto_take_profit and decision.take_profit is None:
+                    decision.take_profit = round(price * (1 + self._config.take_profit_pct / 100), 8)
             else:
-                # SHORT: SL above, TP below
+                # SHORT: SL above, TP below (if enabled)
                 decision.stop_loss = round(price * (1 + self._config.stop_loss_pct / 100), 8)
-                decision.take_profit = round(price * (1 - self._config.take_profit_pct / 100), 8)
+                if self._config.auto_take_profit and decision.take_profit is None:
+                    decision.take_profit = round(price * (1 - self._config.take_profit_pct / 100), 8)
 
             logger.info(
-                "Auto SL/TP applied for %s: SL=%.4f TP=%.4f",
+                "Auto SL/TP applied for %s: SL=%.4f TP=%s",
                 decision.action, decision.stop_loss, decision.take_profit,
             )
 
@@ -272,7 +275,7 @@ class RiskManager:
             "drawdown_pct": round(drawdown_pct, 4),
             "daily_drawdown_pct": round(daily_dd, 4),
             "open_positions": self._open_position_count,
-            "max_open_positions": self._config.max_open_positions,
+            "max_open_positions": self._effective_max_positions(),
             "kill_switch": self._kill_switch,
             "kill_reason": self._kill_reason,
             "daily_paused": self._daily_paused,
@@ -355,6 +358,15 @@ class RiskManager:
         return ((self._daily.start_balance - self._current_balance) / self._daily.start_balance) * 100
 
     # ── Helpers ──────────────────────────────────────────────
+
+    def _effective_max_positions(self) -> int:
+        """Compute max open positions — dynamic or static."""
+        if not self._config.dynamic_positions:
+            return self._config.max_open_positions
+        if self._current_balance <= 0 or self._config.usdc_per_position <= 0:
+            return 1
+        dynamic = int(self._current_balance // self._config.usdc_per_position)
+        return max(1, min(dynamic, self._config.max_open_positions))
 
     async def _check_holding_period(self, decision: Decision) -> ValidationResult | None:
         min_minutes = self._config.min_holding_minutes

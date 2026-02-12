@@ -45,6 +45,13 @@ class PositionTracker:
         leverage: int = 1,
     ) -> int:
         """Record a new position after a BUY or SHORT is executed."""
+        # Prevent duplicate open positions on same symbol
+        existing = await self.get_position_for_symbol(symbol)
+        if existing:
+            raise ValueError(
+                f"Cannot open {direction} {symbol}: already have open position #{existing['id']}"
+            )
+
         # For SHORT: track min_price_seen instead of max_price_seen
         initial_price_seen = entry_price
 
@@ -287,6 +294,40 @@ class PositionTracker:
                 "reason": f"time_stop ({age_hours:.1f}h, PnL={pnl_pct:.2f}% < {self._rc.time_stop_min_pnl_pct}%)",
             }
         return None
+
+    async def update_sl_tp(
+        self,
+        position_id: int,
+        stop_loss: float | None = None,
+        take_profit: float | None = None,
+    ) -> None:
+        """Update SL/TP for an open position (AI adjustment)."""
+        updates: list[str] = []
+        params: list[Any] = []
+        if stop_loss is not None:
+            updates.append("stop_loss=?")
+            params.append(stop_loss)
+        if take_profit is not None:
+            updates.append("take_profit=?")
+            params.append(take_profit)
+        if not updates:
+            return
+        params.append(position_id)
+        await self._db.db.execute(
+            f"UPDATE positions SET {', '.join(updates)} WHERE id=? AND status='OPEN'",
+            params,
+        )
+        await self._db.db.commit()
+        logger.info("AI adjusted position #%d: SL=%s TP=%s", position_id, stop_loss, take_profit)
+
+    async def update_leverage(self, position_id: int, leverage: int) -> None:
+        """Update leverage for an open position (AI adjustment)."""
+        await self._db.db.execute(
+            "UPDATE positions SET leverage=? WHERE id=? AND status='OPEN'",
+            (leverage, position_id),
+        )
+        await self._db.db.commit()
+        logger.info("AI adjusted position #%d: leverage=%dx", position_id, leverage)
 
     async def get_open_positions(self) -> list[dict[str, Any]]:
         """Get all OPEN positions."""

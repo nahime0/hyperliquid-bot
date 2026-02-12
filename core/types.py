@@ -1,23 +1,14 @@
+"""Shared types for trading decisions."""
 from __future__ import annotations
 
-import enum
 from dataclasses import dataclass
-
-
-class Tier(enum.Enum):
-    """Which tier produced the final decision."""
-
-    PRESCREEN = "prescreen"
-    HAIKU = "haiku"
-    OPUS = "opus"
-    FALLBACK = "fallback"
 
 
 @dataclass
 class Decision:
-    """Represents a trading decision from the AI engine."""
+    """Represents a trading decision from a strategy or AI advisor."""
 
-    action: str  # BUY, SELL, HOLD, CLOSE
+    action: str  # BUY, SHORT, SELL, HOLD, CLOSE
     confidence: float  # 0-1
     reasoning: str
     symbol: str | None = None
@@ -26,6 +17,5 @@ class Decision:
     limit_price: float | None = None
     stop_loss: float | None = None
     take_profit: float | None = None
-    strategy_type: str | None = None  # grid, mean_reversion, momentum, other
+    strategy_type: str | None = None  # mean_reversion, rsi_divergence, multi
     raw_response: str | None = None
-    tier: Tier = Tier.FALLBACK

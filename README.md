@@ -6,7 +6,7 @@
 ![License](https://img.shields.io/badge/License-Private-red)
 ![Status](https://img.shields.io/badge/Status-Paper_Trading-blue)
 
-Bot di trading automatico in Python per **Hyperliquid Perpetual Futures**, con un motore decisionale basato su **AI Claude (Anthropic)**. Il bot opera 24/7 con la strategia **Mean Reversion** (LONG e SHORT), supporto a leva conservativa (2-3x), e fee ultra-basse (0.06% round-trip).
+Bot di trading automatico in Python per **Hyperliquid Perpetual Futures**, con AI advisor opzionale (**Claude Code CLI**). Il bot opera 24/7 con strategie **Mean Reversion + RSI Divergence** (LONG e SHORT), supporto a leva conservativa (2-3x), e fee ultra-basse (0.06% round-trip).
 
 > **Perche' Hyperliquid**: Binance Spot ha fee troppo alte (0.15% RT) per micro-profitti. Binance Futures e' bloccato per utenti EU (MiCA). Hyperliquid offre fee 3x piu' basse, possibilita' di shortare, leva, e nessun KYC.
 
@@ -18,7 +18,7 @@ Bot di trading automatico in Python per **Hyperliquid Perpetual Futures**, con u
 
 1. [Overview](#overview)
 2. [Architettura](#architettura)
-3. [AI Decision Engine](#ai-decision-engine)
+3. [AI Advisor](#ai-advisor)
 4. [Strategie](#strategie)
 5. [Risk Management](#risk-management)
 6. [Setup](#setup)
@@ -27,8 +27,7 @@ Bot di trading automatico in Python per **Hyperliquid Perpetual Futures**, con u
 9. [Database](#database)
 10. [Struttura Progetto](#struttura-progetto)
 11. [Configurazione](#configurazione)
-12. [Costi API Anthropic](#costi-api-anthropic)
-13. [Documentazione Dettagliata](#documentazione-dettagliata)
+12. [Documentazione Dettagliata](#documentazione-dettagliata)
 
 ---
 
@@ -40,15 +39,15 @@ Il bot implementa un loop continuo che ogni 60 secondi:
 2. **Calcola indicatori tecnici** (RSI, Bollinger Bands, MACD, EMA) su timeframe multipli (15m, 1h)
 3. **Filtra i trend** con EMA50/EMA200 su 1h (BULLISH/BEARISH/NEUTRAL)
 4. **Genera decisioni autonome** (BUY, SHORT, CLOSE) tramite regole codificate (Mean Reversion)
-5. **Review opzionale dall'AI** (Claude di Anthropic) con potere di veto
+5. **AI advisor opzionale** (Claude Code CLI) approva/defera/aggiusta
 6. **Valida con il Risk Manager** (kill switch, drawdown, Kelly sizing)
 7. **Esegue l'ordine** su Hyperliquid (o lo logga in modalita' paper)
 
 ### Caratteristiche principali
 
-- **Rule-based + AI review**: le decisioni vengono generate da regole codificate, l'AI fa da reviewer opzionale
+- **Rule-based + AI advisor**: le decisioni vengono generate da regole codificate, l'AI (Claude Code CLI) fa da advisor opzionale
 - **LONG e SHORT**: supporto completo per entrambe le direzioni su perpetual futures
-- **3 livelli di AI**: PreScreen deterministico, Haiku per screening rapido, Sonnet per analisi profonda
+- **AI advisor semplice**: una singola chiamata CLI per ciclo, con supporto defer e adjustments
 - **Risk management rigoroso**: kill switch, pausa giornaliera, Kelly Criterion per il sizing, trailing stop, time stop
 - **Leva conservativa**: 2-3x con cross margin
 - **Fee ultra-basse**: 0.06% round-trip (vs 0.15% su Binance Spot)
@@ -74,9 +73,10 @@ Il bot implementa un loop continuo che ogni 60 secondi:
                         │  1. Risk Refresh ──────────┐                │
                         │  2. Check Positions ────────┤                │
                         │  3. Update Trend Filter ────┤                │
-                        │  4. Update Mean Reversion ──┤                │
-                        │  5. Generate Decisions ──────┤                │
-                        │  6. AI Review (optional) ────┤                │
+                        │  4. Update Strategies ──────┤                │
+                        │  5. Generate Candidates ─────┤                │
+                        │  5b. Check Deferred ─────────┤                │
+                        │  6. AI Advisor (optional) ───┤                │
                         │  7. Risk Validate ───────────┤                │
                         │  8. Execute ─────────────────┘                │
                         └────────────────┬────────────────────────────┘
@@ -84,33 +84,32 @@ Il bot implementa un loop continuo che ogni 60 secondi:
               ┌──────────────────────────┼──────────────────────────┐
               │                          │                          │
     ┌─────────▼─────────┐    ┌──────────▼──────────┐    ┌─────────▼─────────┐
-    │ HYPERLIQUID CLIENT │    │    AI ENGINE         │    │   RISK MANAGER    │
+    │ HYPERLIQUID CLIENT │    │    AI ADVISOR        │    │   RISK MANAGER    │
     │                    │    │                      │    │                   │
-    │  REST (via SDK)    │    │  Tier 1: PreScreen   │    │  Kill Switch      │
-    │  WebSocket feeds   │    │  Tier 2: Haiku (~2s) │    │  Daily Pause      │
-    │  Market orders     │    │  Tier 3: Sonnet(~10s)│    │  Liquidation Mon. │
-    │  Position mgmt     │    │  Review mode         │    │  Kelly Criterion  │
-    │  Leverage control  │    │  Fallback Rules      │    │  Trailing Stop    │
-    └─────────┬─────────┘    └──────────┬──────────┘    └─────────┬─────────┘
-              │                          │                          │
-    ┌─────────▼─────────┐    ┌──────────▼──────────┐    ┌─────────▼─────────┐
-    │   MARKET DATA      │    │    ANTHROPIC SDK     │    │  POSITION TRACKER │
+    │  REST (via SDK)    │    │  Claude Code CLI     │    │  Kill Switch      │
+    │  WebSocket feeds   │    │  1 call/cycle        │    │  Daily Pause      │
+    │  Market orders     │    │  Structured JSON     │    │  Liquidation Mon. │
+    │  Position mgmt     │    │  Deferred tracking   │    │  Kelly Criterion  │
+    │  Leverage control  │    │  SL/TP adjustments   │    │  Trailing Stop    │
+    └─────────┬─────────┘    └──────────────────────┘    └─────────┬─────────┘
+              │                                                     │
+    ┌─────────▼─────────┐    ┌─────────────────────┐    ┌─────────▼─────────┐
+    │   MARKET DATA      │    │   STRATEGIE          │    │  POSITION TRACKER │
     │                    │    │                      │    │                   │
-    │  allMids WS stream │    │  claude-haiku-4-5    │    │  LONG / SHORT     │
-    │  Candle WS streams │    │  claude-sonnet-4-5   │    │  Trailing SL      │
-    │  Candle cache      │    │  Tool Use (JSON)     │    │  Time Stop        │
-    │  RSI, BB, MACD,    │    └─────────────────────┘    │  Direction-aware   │
-    │  EMA indicators    │                               └───────────────────┘
-    └───────────────────┘
+    │  allMids WS stream │    │  Mean Reversion      │    │  LONG / SHORT     │
+    │  Candle WS streams │    │  RSI Divergence      │    │  Trailing SL      │
+    │  Candle cache      │    │  Multi-Strategy      │    │  Time Stop        │
+    │  RSI, BB, EMA      │    │  Trend Filter        │    │  Direction-aware   │
+    │  indicators        │    │  Cooldown            │    │  AI adjustments   │
+    └───────────────────┘    └─────────────────────┘    └───────────────────┘
               │
-    ┌─────────▼─────────┐    ┌─────────────────────┐    ┌───────────────────┐
-    │   STRATEGIE        │    │    DATABASE          │    │   DASHBOARD       │
-    │                    │    │                      │    │                   │
-    │  Mean Reversion    │    │  SQLite (aiosqlite)  │    │  aiohttp Server   │
-    │  LONG + SHORT      │    │  Trades, Positions,  │    │  WebSocket 2s     │
-    │  Trend Filter      │    │  AI Decisions,       │    │  Dark Theme       │
-    │  Cooldown          │    │  Balance Snapshots   │    └───────────────────┘
-    └───────────────────┘    └─────────────────────┘
+    ┌─────────▼─────────┐    ┌───────────────────┐
+    │    DATABASE        │    │   DASHBOARD       │
+    │                    │    │                   │
+    │  SQLite (aiosqlite)│    │  aiohttp Server   │
+    │  Trades, Positions │    │  WebSocket 2s     │
+    │  Balance Snapshots │    │  Dark Theme       │
+    └───────────────────┘    └───────────────────┘
 ```
 
 ### Stack tecnologico
@@ -119,7 +118,7 @@ Il bot implementa un loop continuo che ogni 60 secondi:
 |---|---|
 | Linguaggio | Python 3.11+ (async/await) |
 | Exchange | `hyperliquid-python-sdk` (REST + WebSocket) |
-| AI Engine | `anthropic` SDK (Claude Haiku + Sonnet) |
+| AI Advisor | Claude Code CLI (structured JSON) |
 | Indicatori | `ta` library (RSI, BB, MACD, EMA) |
 | Dati | `pandas` per time series, `aiosqlite` per persistenza |
 | Dashboard | `aiohttp` (HTTP + WebSocket) |
@@ -129,80 +128,24 @@ Il bot implementa un loop continuo che ogni 60 secondi:
 
 ---
 
-## AI Decision Engine
+## AI Advisor
 
-Il bot usa un motore decisionale ibrido: **regole codificate generano le decisioni**, l'AI fa da **reviewer opzionale** con potere di veto.
+Il bot usa un **AI advisor opzionale** basato su Claude Code CLI. Le strategie generano candidate decisions, l'AI le rivede e puo':
 
-### Architettura 3-Tier
+- **Approvare** entry (BUY/SHORT) con eventuali aggiustamenti a SL/TP/size
+- **Deferire** entry (HOLD con condizioni: attesa cicli o prezzo target)
+- **Chiudere** posizioni aperte (CLOSE)
+- **Aggiustare** posizioni (ADJUST: SL/TP/leverage)
 
 ```
-Regole Mean Reversion
-        │
-        ▼
-  Candidate decisions
-  (BUY, SHORT, CLOSE)
-        │
-        ▼
-┌──────────────────────┐
-│  TIER 1: PreScreen   │  Costo: 0$  |  Latenza: 0ms
-│  (Regole determin.)  │
-│                      │
-│  - Rate limit        │── BLOCCA ──→ HOLD immediato
-│  - Snapshot uguale   │
-│  - Balance < minimo  │
-│  - Max posizioni     │
-│  - 5 perdite consec. │
-│                      │
-│  PASSA ─────────────┐│
-└──────────────────────┘│
-        │               │
-        ▼               │
-┌──────────────────────┐│
-│  TIER 2: Haiku       ││  Costo: ~$0.001/call  |  Latenza: ~2s
-│  (Screening rapido)  ││
-│                      ││
-│  - Analisi condensata││
-│  - HOLD → STOP       │── HOLD ──→ Veto (non serve Sonnet)
-│  - BUY conf < 0.7    │── WEAK ──→ HOLD forzato
-│  - CLOSE → conferma  ││
-│  - BUY/SHORT conf≥0.7││
-│                      ││
-│  ESCALA ────────────┐││
-└──────────────────────┘││
-        │               ││
-        ▼               ││
-┌──────────────────────┐││
-│  TIER 3: Sonnet      │││  Costo: ~$0.01-0.03/call  |  Latenza: ~10-15s
-│  (Analisi profonda)  │││
-│                      │││
-│  - Contesto completo │││
-│  - Reasoning esteso  │││
-│  - Stop loss, TP     │││
-│  - Sizing suggerito  │││
-│                      │││
-│  DECISIONE FINALE ───┘│┘
-└──────────────────────┘
-        │
-        ▼
-   Risk Manager
-   (Veto finale)
+Strategie → Candidates → AI Advisor (1 call/cycle) → Risk Manager → Execute
 ```
 
-### Schema decisione AI
+Una singola chiamata CLI per ciclo, con structured JSON (`--json-schema`).
+Se non ci sono posizioni ne' opportunita', la chiamata viene saltata.
+Su errore/timeout: log warning, il bot continua autonomamente.
 
-```json
-{
-  "action": "BUY | SHORT | SELL | HOLD | CLOSE",
-  "symbol": "ETH",
-  "size_pct": 5.0,
-  "order_type": "MARKET",
-  "stop_loss": 1980.00,
-  "take_profit": 2030.75,
-  "confidence": 0.85,
-  "reasoning": "RSI oversold a 22, prezzo sotto BB lower...",
-  "strategy_type": "mean_reversion | momentum | other"
-}
-```
+Per dettagli, vedi [`docs/ai-engine.md`](docs/ai-engine.md).
 
 ---
 
@@ -323,7 +266,7 @@ Con aggiustamenti:
 
 - **Python 3.11+** (testato con 3.14)
 - **Wallet Hyperliquid** (o API wallet dedicato)
-- **API Key Anthropic** per il motore AI
+- **Claude Code CLI** installato (per AI advisor, opzionale)
 - (Opzionale) Bot Telegram per le notifiche
 
 ### Installazione
@@ -347,7 +290,6 @@ pandas>=2.1.0             # Time series
 ta>=0.11.0                # Indicatori tecnici (RSI, BB, MACD, EMA)
 aiosqlite>=0.19.0         # SQLite asincrono
 python-dotenv>=1.0.0      # Config da .env
-anthropic>=0.50.0         # SDK Anthropic (AI engine)
 aiohttp>=3.9.0            # Dashboard web + Telegram
 ```
 
@@ -364,10 +306,9 @@ HL_DEFAULT_LEVERAGE=2          # leva (2-3x consigliato)
 HL_MARGIN_MODE=cross           # cross o isolated
 HL_MAX_FUNDING_RATE=0.0005     # max funding rate accettabile
 
-# Anthropic API
-ANTHROPIC_API_KEY=sk-ant-...
-AI_HAIKU_MODEL=claude-haiku-4-5-20251001
-AI_OPUS_MODEL=claude-sonnet-4-5-20250929
+# AI Advisor (opzionale, richiede Claude Code CLI)
+AI_MODEL=opus              # modello (opus, sonnet, haiku)
+AI_TIMEOUT=120             # timeout secondi
 
 # Telegram (opzionale)
 TELEGRAM_BOT_TOKEN=
@@ -444,8 +385,7 @@ Apri `http://localhost:8080` nel browser.
 |---|---|
 | **Balance** | Saldo corrente, peak, drawdown |
 | **Equity Curve** | Grafico storico del balance |
-| **AI Decisions** | Ultime 50 decisioni con tier, azione, confidenza, reasoning |
-| **AI Costs** | Breakdown costi per tier e totali |
+| **AI Decisions** | Ultime decisioni con azione, confidenza, reasoning |
 | **Trades** | Ultimi 50 trade con P&L |
 | **Trade Stats** | Win rate, profit factor, perdite consecutive |
 | **Positions** | Posizioni aperte con direction, leverage, liquidation price |
@@ -463,7 +403,6 @@ SQLite (via `aiosqlite`) con 5 tabelle principali. Schema completo in [`docs/dat
 | `positions` | Posizioni aperte/chiuse con SL/TP, trailing, direction, leverage |
 | `balance_snapshots` | Storico bilancio per equity curve |
 | `orders` | Ordini piazzati |
-| `ai_decisions` | Storico decisioni AI con tier e costo |
 
 Il database si trova in `data/trading_bot.db`.
 
@@ -498,20 +437,18 @@ binance/
 │   ├── __init__.py
 │   ├── client.py                    # HyperliquidClient: wrapper async con retry/backoff
 │   ├── market_data.py               # MarketData: WebSocket feeds, candle cache, indicatori
-│   └── ai_engine/
-│       ├── __init__.py              # Esporta AIEngine, Decision, Tier
-│       ├── types.py                 # Dataclass Decision + enum Tier
-│       ├── prescreen.py             # Tier 1: regole deterministiche
-│       ├── engine.py                # Tier 2+3: Haiku screening + Sonnet analisi
-│       └── backends/                # Backend pluggabili (Anthropic SDK, CLI, etc.)
+│   ├── ai_advisor.py                # AI Advisor: Claude Code CLI integration
+│   └── types.py                     # Decision dataclass
 │
 ├── strategies/
 │   ├── __init__.py                  # Esporta Strategy, MeanReversionStrategy, TrendFilter
 │   ├── base.py                      # ABC Strategy: start(), stop(), update(), get_state()
-│   ├── grid.py                      # GridStrategy (disabilitata, mantenuta per history)
 │   ├── mean_reversion.py            # Mean Reversion: LONG + SHORT, segnali autonomi
+│   ├── rsi_divergence.py            # RSI Divergence: swing detection
+│   ├── multi_strategy.py            # Multi-strategy aggregator
 │   ├── trend_filter.py              # EMA50/EMA200 trend classification
-│   └── cooldown.py                  # CooldownTracker: per-symbol + global
+│   ├── cooldown.py                  # CooldownTracker: per-symbol + global
+│   └── grid.py                      # GridStrategy (disabilitata, mantenuta per history)
 │
 ├── risk/
 │   ├── __init__.py
@@ -530,17 +467,11 @@ binance/
 │
 ├── schemas/
 │   ├── __init__.py
-│   ├── decision.json                # JSON Schema per decisione completa
-│   ├── multi_decision.json          # Schema per decisioni multiple
-│   ├── screening_decision.json      # Schema per screening (Haiku)
-│   ├── multi_screening_decision.json
-│   └── review_decision.json         # Schema per review
+│   └── ai_advisor_output.json       # JSON Schema per output AI advisor
 │
 ├── prompts/
 │   ├── __init__.py
-│   ├── trading_decision.md          # Prompt per Tier 3 (analisi profonda)
-│   ├── screening_decision.md        # Prompt per Tier 2 (screening)
-│   └── review_decision.md           # Prompt per review mode
+│   └── ai_advisor.md                # System prompt per AI advisor
 │
 ├── dashboard/
 │   ├── __init__.py
@@ -556,7 +487,6 @@ binance/
 ├── scripts/
 │   ├── __init__.py
 │   ├── test_connection.py           # Test connessione Hyperliquid
-│   ├── test_ai_engine.py            # Test AI engine
 │   ├── download_history.py          # Scarica klines storiche
 │   ├── backtest_runner.py           # Esegue backtest con parameter sweep
 │   └── strategy_sweep.py            # Sweep parametri strategie
@@ -583,27 +513,17 @@ binance/
 | `HL_MARGIN_MODE` | `cross` | `cross` o `isolated` |
 | `HL_MAX_FUNDING_RATE` | `0.0005` | Max funding rate accettabile (0.05%/8h) |
 
-### AI Decision Engine
+### AI Advisor
 
 | Variabile | Default | Descrizione |
 |---|---|---|
 | `AI_DECISION_INTERVAL` | `60` | Secondi tra un ciclo e l'altro |
-| `AI_TIMEOUT` | `120` | Timeout globale per l'AI (secondi) |
+| `AI_MODEL` | `opus` | Modello Claude Code (`opus`, `sonnet`, `haiku`) |
+| `AI_TIMEOUT` | `120` | Timeout per la chiamata CLI (secondi) |
 | `AI_MIN_CONFIDENCE` | `0.6` | Sotto questa soglia → HOLD forzato |
 | `AI_FALLBACK_ON_ERROR` | `HOLD` | Azione di default se l'AI non risponde |
-| `AI_LOG_REASONING` | `true` | Salva il reasoning nel DB |
-
-### Anthropic SDK
-
-| Variabile | Default | Descrizione |
-|---|---|---|
-| `ANTHROPIC_API_KEY` | (vuoto) | Chiave API Anthropic |
-| `AI_HAIKU_MODEL` | `claude-haiku-4-5-20251001` | Modello per Tier 2 (screening) |
-| `AI_OPUS_MODEL` | `claude-sonnet-4-5-20250929` | Modello per Tier 3 (analisi) |
-| `AI_HAIKU_TIMEOUT` | `15` | Timeout Haiku (secondi) |
-| `AI_OPUS_TIMEOUT` | `60` | Timeout Sonnet (secondi) |
-| `AI_HAIKU_HOLD_CONFIDENCE` | `0.7` | Soglia escalation Haiku → Sonnet |
-| `AI_MAX_SPREAD_PCT` | `0.5` | Spread massimo per PreScreen |
+| `AI_LOG_REASONING` | `true` | Logga il reasoning dell'AI |
+| `AI_MAX_SPREAD_PCT` | `0.5` | Spread massimo per screening |
 
 ### Risk Management
 
@@ -645,28 +565,6 @@ binance/
 
 ---
 
-## Costi API Anthropic
-
-Il sistema a 3 tier minimizza i costi. La maggior parte dei cicli e' risolta dal PreScreen (gratuito) o da Haiku (economico).
-
-| Tier | Modello | Costo/chiamata | Frequenza |
-|---|---|---|---|
-| **PreScreen** | Nessuno (regole) | **$0.00** | ~70% dei cicli |
-| **Haiku** | claude-haiku-4-5 | **~$0.001** | ~25% dei cicli |
-| **Sonnet** | claude-sonnet-4-5 | **~$0.01-0.03** | ~5% dei cicli |
-
-### Stima costi giornalieri
-
-Con intervallo di 60 secondi (1.440 cicli/giorno):
-
-| Scenario | Costo/giorno |
-|---|---|
-| Mercato calmo | ~$0.50 - $1.00 |
-| Mercato attivo | ~$2.00 - $5.00 |
-| Max teorico | ~$15 - $40 |
-
----
-
 ## Documentazione Dettagliata
 
 Per approfondimenti, consulta la cartella [`docs/`](docs/):
@@ -676,7 +574,8 @@ Per approfondimenti, consulta la cartella [`docs/`](docs/):
 | [`architecture.md`](docs/architecture.md) | Architettura del sistema, flusso dati, componenti |
 | [`strategies.md`](docs/strategies.md) | Mean Reversion LONG/SHORT, Trend Filter, segnali |
 | [`risk-management.md`](docs/risk-management.md) | Kill switch, trailing stop, Kelly sizing, cooldown |
-| [`ai-engine.md`](docs/ai-engine.md) | 3-Tier AI engine, prompt, schema, review mode |
+| [`ai-engine.md`](docs/ai-engine.md) | AI Advisor (Claude Code CLI), schema, defer |
+| [`DEVELOPMENT.md`](docs/DEVELOPMENT.md) | Guida tecnica, struttura progetto, convenzioni |
 | [`configuration.md`](docs/configuration.md) | Tutte le variabili .env con dettagli |
 | [`database.md`](docs/database.md) | Schema completo tabelle, migrazioni |
 | [`deployment.md`](docs/deployment.md) | Setup, installazione, deployment su server |

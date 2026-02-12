@@ -1,7 +1,7 @@
 """Hyperliquid client — async wrapper around the synchronous SDK.
 
 All SDK calls are wrapped with asyncio.to_thread() since the SDK is synchronous.
-Includes exponential backoff retry for transient errors.
+Includes exponential backoff retry and global rate limiting for transient errors.
 """
 from __future__ import annotations
 
@@ -22,6 +22,41 @@ logger = get_logger(__name__)
 MAX_RETRIES = 3
 RETRY_BASE_DELAY = 1.0  # seconds
 
+# Rate limiting — token bucket
+# Mainnet: 1200 weight/min = 20/sec. We use 10/sec for safety headroom.
+# Testnet has stricter (undocumented) limits.
+_RATE_LIMIT_PER_SEC = 10
+_RATE_LIMIT_BURST = 5
+
+
+class _RateLimiter:
+    """Async token-bucket rate limiter."""
+
+    def __init__(self, rate: float, burst: int) -> None:
+        self._rate = rate      # tokens refilled per second
+        self._burst = burst    # max tokens (burst capacity)
+        self._tokens = float(burst)
+        self._last = 0.0
+        self._lock = asyncio.Lock()
+
+    async def acquire(self) -> None:
+        """Wait until a token is available, then consume it."""
+        while True:
+            async with self._lock:
+                now = asyncio.get_event_loop().time()
+                if self._last == 0.0:
+                    self._last = now
+                self._tokens = min(
+                    self._burst,
+                    self._tokens + (now - self._last) * self._rate,
+                )
+                self._last = now
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
+                wait = (1.0 - self._tokens) / self._rate
+            await asyncio.sleep(wait)
+
 
 class HyperliquidClient:
     """Async wrapper around Hyperliquid SDK (Info + Exchange)."""
@@ -33,6 +68,7 @@ class HyperliquidClient:
         self._meta: dict[str, Any] | None = None
         self._sz_decimals: dict[str, int] = {}  # coin → szDecimals
         self._address: str = ""  # derived Ethereum address
+        self._limiter = _RateLimiter(_RATE_LIMIT_PER_SEC, _RATE_LIMIT_BURST)
 
     async def connect(self) -> None:
         """Initialize Info and Exchange clients."""
@@ -75,6 +111,7 @@ class HyperliquidClient:
 
     async def _load_meta(self) -> None:
         """Load universe metadata (szDecimals, maxLeverage, etc.)."""
+        await self._limiter.acquire()
         self._meta = await asyncio.to_thread(self.info.meta)
         for asset in self._meta.get("universe", []):
             self._sz_decimals[asset["name"]] = asset["szDecimals"]
@@ -101,9 +138,10 @@ class HyperliquidClient:
     # ── Retry helper ────────────────────────────────────────
 
     async def _retry(self, fn: Any, *args: Any, **kwargs: Any) -> Any:
-        """Execute a sync SDK call via to_thread with exponential backoff."""
+        """Execute a sync SDK call via to_thread with rate limiting and exponential backoff."""
         last_exc: Exception | None = None
         for attempt in range(MAX_RETRIES):
+            await self._limiter.acquire()
             try:
                 return await asyncio.to_thread(fn, *args, **kwargs)
             except Exception as exc:
@@ -232,7 +270,7 @@ class HyperliquidClient:
         )
         result = await self._retry(
             self.exchange.market_open,
-            coin, is_buy, sz, None, None,
+            coin, is_buy, sz,
         )
         logger.info("Order result: %s", result)
         return result

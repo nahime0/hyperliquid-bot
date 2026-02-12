@@ -44,23 +44,51 @@ Ogni decisione passa attraverso `validate_decision()`:
 3. **Kill switch** → bloccato se attivo
 4. **Daily pause** → bloccato se attivo (solo BUY/SHORT)
 5. **Symbol required** → bloccato se non specificato
-6. **Max positions** → bloccato se >= 5 posizioni aperte
+6. **Max positions** → bloccato se >= max posizioni (dinamico o statico)
 7. **Duplicate** → bloccato se esiste gia' posizione sullo stesso coin
 8. **Min balance** → bloccato se balance < 50 USDC
 9. **Min confidence** → bloccato se confidence < 0.5
 10. **Position sizing** → calcolo Kelly Criterion
 11. **Auto SL/TP** → applicato automaticamente se non specificato
 
-### SL/TP automatico (direction-aware)
+### SL automatico (direction-aware)
 
-Se la decisione non include SL/TP, vengono calcolati automaticamente:
+Se la decisione non include SL, viene calcolato automaticamente:
 
-| Direzione | Stop Loss | Take Profit |
-|---|---|---|
-| BUY (LONG) | price * (1 - stop_loss_pct / 100) | price * (1 + take_profit_pct / 100) |
-| SHORT | price * (1 + stop_loss_pct / 100) | price * (1 - take_profit_pct / 100) |
+| Direzione | Stop Loss |
+|---|---|
+| BUY (LONG) | price * (1 - stop_loss_pct / 100) |
+| SHORT | price * (1 + stop_loss_pct / 100) |
 
-Default: SL = 1%, TP = 1.5%.
+Default: SL = 1%.
+
+### Take Profit (opzionale)
+
+Di default `AUTO_TAKE_PROFIT=false`: il trailing stop e' il meccanismo primario di profit-taking. Con `AUTO_TAKE_PROFIT=true`, viene generato anche un TP automatico:
+
+| Direzione | Take Profit |
+|---|---|
+| BUY (LONG) | price * (1 + take_profit_pct / 100) |
+| SHORT | price * (1 - take_profit_pct / 100) |
+
+L'AI advisor puo' comunque specificare un TP esplicito indipendentemente da questa impostazione.
+
+### Max Positions (dinamico)
+
+Con `DYNAMIC_POSITIONS=true` (default), il numero massimo di posizioni scala col balance:
+
+```
+max_positions = min(MAX_OPEN_POSITIONS, balance // USDC_PER_POSITION)
+max_positions = max(1, max_positions)  # floor a 1
+```
+
+Esempio con `USDC_PER_POSITION=200`, `MAX_OPEN_POSITIONS=5`:
+| Balance | Max Positions |
+|---|---|
+| 100 USDC | 1 |
+| 400 USDC | 2 |
+| 1000 USDC | 5 (cap) |
+| 2000 USDC | 5 (cap) |
 
 ## Position Sizing (Kelly Criterion)
 

@@ -36,27 +36,11 @@ class HyperliquidConfig:
 @dataclass(frozen=True)
 class AIConfig:
     decision_interval: int = 60
-    timeout: int = 120
     min_confidence: float = 0.6
     fallback_on_error: str = "HOLD"
     log_reasoning: bool = True
-    # Anthropic API (direct SDK calls)
-    anthropic_api_key: str = ""
-    haiku_model: str = "claude-haiku-4-5-20251001"
-    haiku_timeout: int = 15
-    haiku_hold_confidence: float = 0.7
-    opus_model: str = "claude-sonnet-4-5-20250929"
-    opus_timeout: int = 60
-    # Multi-backend: screening tier (Tier 2)
-    screening_backend: str = "anthropic_sdk"
-    screening_model: str = ""  # fallback to haiku_model
-    screening_timeout: int = 0  # fallback to haiku_timeout
-    # Multi-backend: analysis tier (Tier 3)
-    analysis_backend: str = "anthropic_sdk"
-    analysis_model: str = ""  # fallback to opus_model
-    analysis_timeout: int = 0  # fallback to opus_timeout
-    # Pre-screen thresholds
-    max_spread_pct: float = 0.5
+    model: str = "opus"
+    timeout: int = 120
 
 
 @dataclass(frozen=True)
@@ -64,9 +48,12 @@ class RiskConfig:
     max_trade_pct: float = 10.0
     stop_loss_pct: float = 1.0
     take_profit_pct: float = 1.5
+    auto_take_profit: bool = False  # False → no auto-TP, rely on trailing stop
     max_daily_drawdown_pct: float = 5.0
     max_total_drawdown_pct: float = 15.0
-    max_open_positions: int = 5
+    max_open_positions: int = 5         # hard cap (or static value if dynamic disabled)
+    dynamic_positions: bool = True      # scale max positions with balance
+    usdc_per_position: float = 200.0   # 1 position slot per N USDC
     min_balance_usdc: float = 50.0
     min_holding_minutes: int = 15  # minimum time before AI can close a position
     max_leverage: int = 3
@@ -141,31 +128,22 @@ def load_settings() -> Settings:
         ),
         ai=AIConfig(
             decision_interval=int(os.getenv("AI_DECISION_INTERVAL", "60")),
-            timeout=int(os.getenv("AI_TIMEOUT", "120")),
             min_confidence=float(os.getenv("AI_MIN_CONFIDENCE", "0.6")),
             fallback_on_error=os.getenv("AI_FALLBACK_ON_ERROR", "HOLD"),
             log_reasoning=_bool(os.getenv("AI_LOG_REASONING"), default=True),
-            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", ""),
-            haiku_model=os.getenv("AI_HAIKU_MODEL", "claude-haiku-4-5-20251001"),
-            haiku_timeout=int(os.getenv("AI_HAIKU_TIMEOUT", "15")),
-            haiku_hold_confidence=float(os.getenv("AI_HAIKU_HOLD_CONFIDENCE", "0.7")),
-            opus_model=os.getenv("AI_OPUS_MODEL", "claude-sonnet-4-5-20250929"),
-            opus_timeout=int(os.getenv("AI_OPUS_TIMEOUT", "60")),
-            screening_backend=os.getenv("AI_SCREENING_BACKEND", "anthropic_sdk"),
-            screening_model=os.getenv("AI_SCREENING_MODEL", ""),
-            screening_timeout=int(os.getenv("AI_SCREENING_TIMEOUT", "0")),
-            analysis_backend=os.getenv("AI_ANALYSIS_BACKEND", "anthropic_sdk"),
-            analysis_model=os.getenv("AI_ANALYSIS_MODEL", ""),
-            analysis_timeout=int(os.getenv("AI_ANALYSIS_TIMEOUT", "0")),
-            max_spread_pct=float(os.getenv("AI_MAX_SPREAD_PCT", "0.5")),
+            model=os.getenv("AI_MODEL", "opus"),
+            timeout=int(os.getenv("AI_TIMEOUT", "120")),
         ),
         risk=RiskConfig(
             max_trade_pct=float(os.getenv("MAX_TRADE_PCT", "10")),
             stop_loss_pct=float(os.getenv("STOP_LOSS_PCT", "1.0")),
             take_profit_pct=float(os.getenv("TAKE_PROFIT_PCT", "1.5")),
+            auto_take_profit=_bool(os.getenv("AUTO_TAKE_PROFIT"), default=False),
             max_daily_drawdown_pct=float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", "5.0")),
             max_total_drawdown_pct=float(os.getenv("MAX_TOTAL_DRAWDOWN_PCT", "15.0")),
             max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "5")),
+            dynamic_positions=_bool(os.getenv("DYNAMIC_POSITIONS"), default=True),
+            usdc_per_position=float(os.getenv("USDC_PER_POSITION", "200.0")),
             min_balance_usdc=float(os.getenv("MIN_BALANCE_USDC", "50.0")),
             min_holding_minutes=int(os.getenv("MIN_HOLDING_MINUTES", "15")),
             trailing_breakeven_pct=float(os.getenv("TRAILING_BREAKEVEN_PCT", "1.0")),

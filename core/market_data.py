@@ -55,6 +55,7 @@ class MarketData:
 
         # Mid prices for all assets — updated via WS
         self._mid_prices: dict[str, float] = {}
+        self._mid_updated_at: float = 0.0  # last WS update timestamp
         self._mid_lock = threading.Lock()
 
         # OHLCV candles per (coin, interval)
@@ -79,6 +80,13 @@ class MarketData:
         self._coins = coins
         self._intervals = intervals
         self._running = True
+
+        # Pre-create empty DataFrames so WS updates aren't dropped if REST fails
+        for coin in coins:
+            for interval in intervals:
+                key = (coin, interval)
+                if key not in self._candles:
+                    self._candles[key] = pd.DataFrame()
 
         # Load historical candles via REST (with concurrency limit)
         sem = asyncio.Semaphore(_REST_SEMAPHORE_LIMIT)
@@ -118,16 +126,20 @@ class MarketData:
         )
 
         # Subscribe to allMids (single stream for all mid prices)
-        def _on_all_mids(data: dict[str, Any]) -> None:
+        def _on_all_mids(ws_msg: dict[str, Any]) -> None:
             if not self._running:
                 return
-            mids = data.get("mids", {})
+            # SDK passes full ws_msg: {"channel": "allMids", "data": {"mids": {...}}}
+            inner = ws_msg.get("data", ws_msg)
+            mids = inner.get("mids", {})
             with self._mid_lock:
                 for coin, price_str in mids.items():
                     try:
                         self._mid_prices[coin] = float(price_str)
                     except (ValueError, TypeError):
                         pass
+                if mids:
+                    self._mid_updated_at = time.time()
 
         await asyncio.to_thread(
             self._ws_info.subscribe,
@@ -147,20 +159,22 @@ class MarketData:
 
     def _make_candle_callback(self, coin: str, interval: str):
         """Create a candle callback closure for a specific coin/interval."""
-        def _on_candle(data: dict[str, Any]) -> None:
+        def _on_candle(ws_msg: dict[str, Any]) -> None:
             if not self._running:
                 return
-            self._handle_candle_ws(coin, interval, data)
+            self._handle_candle_ws(coin, interval, ws_msg)
         return _on_candle
 
-    def _handle_candle_ws(self, coin: str, interval: str, data: dict[str, Any]) -> None:
+    def _handle_candle_ws(self, coin: str, interval: str, ws_msg: dict[str, Any]) -> None:
         """Process a candle WS update (runs in WS thread)."""
         key = (coin, interval)
-        candle_data = data.get("data", [])
-        if not candle_data:
-            return
+        # SDK passes full ws_msg: {"channel": "candle", "data": {candle_obj}}
+        inner = ws_msg.get("data", ws_msg)
+        candle_data = inner if isinstance(inner, list) else [inner]
 
         for c in candle_data:
+            if not isinstance(c, dict) or "t" not in c:
+                continue
             ts = pd.Timestamp(c["t"], unit="ms", tz="UTC")
             row = {
                 "open": float(c["o"]),
@@ -243,6 +257,13 @@ class MarketData:
         """Get latest mid price for a coin (from WS stream)."""
         with self._mid_lock:
             return self._mid_prices.get(coin)
+
+    def is_price_stale(self, max_age_seconds: float = 120.0) -> bool:
+        """Check if WS mid prices haven't been updated recently."""
+        with self._mid_lock:
+            if self._mid_updated_at == 0:
+                return True
+            return (time.time() - self._mid_updated_at) > max_age_seconds
 
     def get_candles(self, coin: str, interval: str) -> pd.DataFrame | None:
         """Get candle DataFrame for coin/interval."""

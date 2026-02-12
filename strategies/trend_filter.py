@@ -88,7 +88,7 @@ class TrendFilter:
     def get_state(self, symbol: str) -> dict[str, Any]:
         state = self._states.get(symbol)
         if not state:
-            return {"trend": "UNKNOWN"}
+            return {"trend": "NEUTRAL"}
         return {
             "trend": state.trend,
             "ema50": state.ema50,
