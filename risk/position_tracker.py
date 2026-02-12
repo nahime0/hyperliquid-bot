@@ -32,6 +32,10 @@ class PositionTracker:
     def __init__(self, db: Database, risk_config: RiskConfig | None = None) -> None:
         self._db = db
         self._rc = risk_config
+        self._cycle_count: int = 0
+
+    def set_cycle(self, cycle: int) -> None:
+        self._cycle_count = cycle
 
     async def open_position(
         self,
@@ -231,6 +235,24 @@ class PositionTracker:
                     "Trailing SL updated #%d %s LONG: %.4f → %.4f (gain=%.2f%%, max=%.4f)",
                     pos["id"], pos["symbol"], old_trailing, new_trailing, gain_pct, new_max,
                 )
+                if self._cycle_count > 0:
+                    try:
+                        await self._db.insert_event(
+                            cycle=self._cycle_count,
+                            symbol=pos["symbol"],
+                            event_type="TRAILING_UPDATE",
+                            source="position_tracker",
+                            details={
+                                "direction": "LONG",
+                                "old_sl": round(old_trailing, 6),
+                                "new_sl": round(new_trailing, 6),
+                                "gain_pct": round(gain_pct, 2),
+                                "max_seen": round(new_max, 6),
+                            },
+                            position_id=pos["id"],
+                        )
+                    except Exception:
+                        logger.debug("Failed to log TRAILING_UPDATE event", exc_info=True)
 
     async def _update_trailing_short(self, pos: dict[str, Any], current_price: float, entry: float) -> None:
         """Trailing stop for SHORT: SL moves down as price drops."""
@@ -264,6 +286,24 @@ class PositionTracker:
                     "Trailing SL updated #%d %s SHORT: %.4f → %.4f (gain=%.2f%%, min=%.4f)",
                     pos["id"], pos["symbol"], old_trailing, new_trailing, gain_pct, new_min,
                 )
+                if self._cycle_count > 0:
+                    try:
+                        await self._db.insert_event(
+                            cycle=self._cycle_count,
+                            symbol=pos["symbol"],
+                            event_type="TRAILING_UPDATE",
+                            source="position_tracker",
+                            details={
+                                "direction": "SHORT",
+                                "old_sl": round(old_trailing, 6),
+                                "new_sl": round(new_trailing, 6),
+                                "gain_pct": round(gain_pct, 2),
+                                "min_seen": round(new_min, 6),
+                            },
+                            position_id=pos["id"],
+                        )
+                    except Exception:
+                        logger.debug("Failed to log TRAILING_UPDATE event", exc_info=True)
 
     def _check_time_stop(self, pos: dict[str, Any], current_price: float) -> dict[str, Any] | None:
         """Check if position should be closed due to time stop."""
@@ -352,6 +392,23 @@ class PositionTracker:
         )
         await self._db.db.commit()
         logger.info("AI adjusted position #%d: SL=%s TP=%s", position_id, stop_loss, take_profit)
+        if self._cycle_count > 0:
+            pos = await self._get_by_id(position_id)
+            if pos:
+                try:
+                    await self._db.insert_event(
+                        cycle=self._cycle_count,
+                        symbol=pos["symbol"],
+                        event_type="POSITION_ADJUSTED",
+                        source="ai_advisor",
+                        details={
+                            "stop_loss": stop_loss,
+                            "take_profit": take_profit,
+                        },
+                        position_id=position_id,
+                    )
+                except Exception:
+                    logger.debug("Failed to log POSITION_ADJUSTED event", exc_info=True)
 
     async def update_leverage(self, position_id: int, leverage: int) -> None:
         """Update leverage for an open position (AI adjustment)."""

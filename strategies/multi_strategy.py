@@ -33,6 +33,11 @@ class MultiStrategy(Strategy):
         self._strategies = strategies
         self._max_decisions = max_decisions
 
+    def set_cycle(self, cycle: int) -> None:
+        for s in self._strategies:
+            if hasattr(s, "set_cycle"):
+                s.set_cycle(cycle)
+
     # -- Lifecycle --
 
     async def start(self) -> None:

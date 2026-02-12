@@ -33,6 +33,7 @@ import ta as ta_lib
 from config.settings import RiskConfig, StrategyConfig
 from core.types import Decision
 from core.market_data import MarketData
+from data.db import Database
 from risk.position_tracker import PositionTracker
 from strategies.base import Strategy
 from strategies.cooldown import CooldownTracker
@@ -67,6 +68,7 @@ class RSIDivergenceStrategy(Strategy):
         risk_config: RiskConfig,
         strategy_config: StrategyConfig,
         coins: list[str] | None = None,
+        db: Database | None = None,
     ) -> None:
         self._md = market_data
         self._trend = trend_filter
@@ -80,6 +82,8 @@ class RSIDivergenceStrategy(Strategy):
         self._signals: dict[str, DivergenceSignal] = {}
         self._funding_rates: dict[str, float] = {}
         self._max_funding_rate: float = 0.0005
+        self._db = db
+        self._cycle_count: int = 0
 
         # RSI Div params from config
         self._rsi_period = strategy_config.rsi_div_period
@@ -96,6 +100,9 @@ class RSIDivergenceStrategy(Strategy):
 
     def set_max_funding_rate(self, rate: float) -> None:
         self._max_funding_rate = rate
+
+    def set_cycle(self, cycle: int) -> None:
+        self._cycle_count = cycle
 
     # -- Lifecycle --
 
@@ -299,6 +306,7 @@ class RSIDivergenceStrategy(Strategy):
 
             if entry:
                 decisions.append(entry)
+                await self._log_signal(entry, sig)
 
         logger.info(
             "[RD SCAN] coins=%d, no_divergence=%d, divergences_found=%d, signals_generated=%d",
@@ -385,6 +393,28 @@ class RSIDivergenceStrategy(Strategy):
             size_pct=10.0,
             order_type="MARKET",
         )
+
+    async def _log_signal(self, decision: Decision, sig: DivergenceSignal) -> None:
+        if not self._db or self._cycle_count <= 0:
+            return
+        try:
+            await self._db.insert_event(
+                cycle=self._cycle_count,
+                symbol=decision.symbol or "",
+                event_type="SIGNAL",
+                source="rsi_divergence",
+                action=decision.action,
+                confidence=decision.confidence,
+                reasoning=decision.reasoning,
+                details={
+                    "divergence": sig.divergence,
+                    "rsi": round(sig.rsi, 2) if sig.rsi is not None else None,
+                    "trend": sig.trend,
+                    "reason": sig.reason,
+                },
+            )
+        except Exception:
+            logger.debug("Failed to log SIGNAL event", exc_info=True)
 
     # -- State (for snapshot / dashboard) --
 

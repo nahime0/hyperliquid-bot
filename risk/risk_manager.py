@@ -74,10 +74,14 @@ class RiskManager:
         self._daily = _DailyState()
         self._active_coins: list[str] = []
         self._last_refresh: float = 0.0
+        self._cycle_count: int = 0
 
     def set_active_pairs(self, coins: list[str]) -> None:
         """Update the list of actively traded coins."""
         self._active_coins = coins
+
+    def set_cycle(self, cycle: int) -> None:
+        self._cycle_count = cycle
 
     # ── Lifecycle ────────────────────────────────────────────
 
@@ -180,15 +184,15 @@ class RiskManager:
 
         # ── Kill switch ──
         if self._kill_switch:
-            return self._block(decision, f"KILL SWITCH: {self._kill_reason}")
+            return await self._block(decision, f"KILL SWITCH: {self._kill_reason}")
 
         # ── Daily pause (blocks new entries and scale-ups) ──
         if self._daily_paused and decision.action in ("BUY", "SHORT", "SCALE_UP"):
-            return self._block(decision, f"DAILY PAUSE: {self._daily_pause_reason}")
+            return await self._block(decision, f"DAILY PAUSE: {self._daily_pause_reason}")
 
         # ── Symbol required for entry/exit ──
         if not decision.symbol:
-            return self._block(decision, "No symbol specified")
+            return await self._block(decision, "No symbol specified")
 
         # ── SCALE_UP: separate validation path ──
         if decision.action == "SCALE_UP":
@@ -197,7 +201,7 @@ class RiskManager:
         # ── Max open positions (dynamic or static) ──
         max_pos = self._effective_max_positions()
         if decision.action in ("BUY", "SHORT") and self._open_position_count >= max_pos:
-            return self._block(
+            return await self._block(
                 decision,
                 f"Max open positions reached ({self._open_position_count}/{max_pos})",
             )
@@ -206,7 +210,7 @@ class RiskManager:
         if decision.action in ("BUY", "SHORT") and decision.symbol and self._position_tracker:
             existing = await self._position_tracker.get_position_for_symbol(decision.symbol)
             if existing:
-                return self._block(
+                return await self._block(
                     decision,
                     f"Already holding {decision.symbol} (position #{existing['id']})",
                 )
@@ -219,14 +223,14 @@ class RiskManager:
 
         # ── Minimum balance ──
         if self._current_balance < self._config.min_balance_usdc:
-            return self._block(
+            return await self._block(
                 decision,
                 f"Balance {self._current_balance:.2f} below minimum {self._config.min_balance_usdc}",
             )
 
         # ── Minimum confidence ──
         if decision.confidence < 0.5:
-            return self._block(decision, f"Confidence {decision.confidence:.2f} too low")
+            return await self._block(decision, f"Confidence {decision.confidence:.2f} too low")
 
         # ── Position sizing (Kelly + utilization boost) ──
         trade_stats = await self._db.get_trade_stats()
@@ -240,7 +244,7 @@ class RiskManager:
         )
 
         if size.size_usdc <= 0:
-            return self._block(decision, f"Position sizer: {size.reason}")
+            return await self._block(decision, f"Position sizer: {size.reason}")
 
         # Update decision with computed size
         decision.size_pct = size.size_pct
@@ -252,7 +256,7 @@ class RiskManager:
                 try:
                     price = await self._client.get_price(decision.symbol)
                 except Exception:
-                    return self._block(decision, "Cannot determine price for stop loss")
+                    return await self._block(decision, "Cannot determine price for stop loss")
 
             if decision.action == "BUY":
                 # LONG: SL below, TP above (if enabled)
@@ -275,6 +279,23 @@ class RiskManager:
             decision.action, decision.symbol, size.size_pct, size.size_usdc,
             decision.confidence, utilization_boost,
         )
+        if self._cycle_count > 0 and decision.symbol:
+            try:
+                await self._db.insert_event(
+                    cycle=self._cycle_count,
+                    symbol=decision.symbol,
+                    event_type="RISK_APPROVED",
+                    source="risk_manager",
+                    action=decision.action,
+                    confidence=decision.confidence,
+                    details={
+                        "size_pct": size.size_pct,
+                        "size_usdc": round(size.size_usdc, 2),
+                        "utilization_boost": round(utilization_boost, 2),
+                    },
+                )
+            except Exception:
+                logger.debug("Failed to log RISK_APPROVED event", exc_info=True)
         return ValidationResult(
             approved=True,
             decision=decision,
@@ -285,11 +306,11 @@ class RiskManager:
     async def _validate_scale_up(self, decision: Decision) -> ValidationResult:
         """Validate a SCALE_UP decision: requires existing position in profit."""
         if not self._position_tracker:
-            return self._block(decision, "No position tracker")
+            return await self._block(decision, "No position tracker")
 
         pos = await self._position_tracker.get_position_for_symbol(decision.symbol)
         if not pos:
-            return self._block(decision, f"SCALE_UP: no open position for {decision.symbol}")
+            return await self._block(decision, f"SCALE_UP: no open position for {decision.symbol}")
 
         # Must be in profit
         pnl_pct = pos.get("pnl_pct")
@@ -308,10 +329,10 @@ class RiskManager:
                 else:
                     pnl_pct = (entry - mid) / entry * 100
             else:
-                return self._block(decision, "SCALE_UP: cannot determine current PnL")
+                return await self._block(decision, "SCALE_UP: cannot determine current PnL")
 
         if pnl_pct <= 0:
-            return self._block(decision, f"SCALE_UP: position is not in profit (PnL={pnl_pct:.2f}%)")
+            return await self._block(decision, f"SCALE_UP: position is not in profit (PnL={pnl_pct:.2f}%)")
 
         # Spread check
         spread_block = await self._check_spread(decision)
@@ -320,7 +341,7 @@ class RiskManager:
 
         # Minimum balance
         if self._current_balance < self._config.min_balance_usdc:
-            return self._block(
+            return await self._block(
                 decision,
                 f"Balance {self._current_balance:.2f} below minimum {self._config.min_balance_usdc}",
             )
@@ -337,7 +358,7 @@ class RiskManager:
         )
 
         if size.size_usdc <= 0:
-            return self._block(decision, f"SCALE_UP sizer: {size.reason}")
+            return await self._block(decision, f"SCALE_UP sizer: {size.reason}")
 
         decision.size_pct = size.size_pct
 
@@ -345,6 +366,23 @@ class RiskManager:
             "Decision APPROVED: SCALE_UP %s size=%.2f%% (%.2f USDC) conf=%.2f PnL=%.2f%%",
             decision.symbol, size.size_pct, size.size_usdc, decision.confidence, pnl_pct,
         )
+        if self._cycle_count > 0 and decision.symbol:
+            try:
+                await self._db.insert_event(
+                    cycle=self._cycle_count,
+                    symbol=decision.symbol,
+                    event_type="RISK_APPROVED",
+                    source="risk_manager",
+                    action="SCALE_UP",
+                    confidence=decision.confidence,
+                    details={
+                        "size_pct": size.size_pct,
+                        "size_usdc": round(size.size_usdc, 2),
+                        "pnl_pct": round(pnl_pct, 2),
+                    },
+                )
+            except Exception:
+                logger.debug("Failed to log RISK_APPROVED event", exc_info=True)
         return ValidationResult(
             approved=True,
             decision=decision,
@@ -495,7 +533,7 @@ class RiskManager:
             mid = (best_ask + best_bid) / 2
             spread_pct = (best_ask - best_bid) / mid * 100
             if spread_pct > max_spread:
-                return self._block(
+                return await self._block(
                     decision,
                     f"Spread {spread_pct:.2f}% > max {max_spread}% for {decision.symbol}",
                 )
@@ -531,16 +569,28 @@ class RiskManager:
         age_minutes = (datetime.now(timezone.utc) - opened).total_seconds() / 60
 
         if age_minutes < min_minutes:
-            return self._block(
+            return await self._block(
                 decision,
                 f"Holding period: {decision.symbol} opened {age_minutes:.0f}m ago "
                 f"(min {min_minutes}m). SL/TP will still auto-trigger.",
             )
         return None
 
-    @staticmethod
-    def _block(decision: Decision, reason: str) -> ValidationResult:
+    async def _block(self, decision: Decision, reason: str) -> ValidationResult:
         logger.warning("Decision BLOCKED: %s %s — %s", decision.action, decision.symbol, reason)
+        if self._cycle_count > 0 and decision.symbol:
+            try:
+                await self._db.insert_event(
+                    cycle=self._cycle_count,
+                    symbol=decision.symbol,
+                    event_type="RISK_BLOCKED",
+                    source="risk_manager",
+                    action=decision.action,
+                    confidence=decision.confidence,
+                    reasoning=reason,
+                )
+            except Exception:
+                logger.debug("Failed to log RISK_BLOCKED event", exc_info=True)
         return ValidationResult(approved=False, decision=decision, reason=reason)
 
     async def snapshot_balance(self) -> None:

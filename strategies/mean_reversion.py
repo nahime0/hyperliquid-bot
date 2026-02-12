@@ -38,6 +38,7 @@ import ta as ta_lib
 from config.settings import RiskConfig, StrategyConfig
 from core.types import Decision
 from core.market_data import MarketData
+from data.db import Database
 from risk.position_tracker import PositionTracker
 from strategies.base import Strategy
 from strategies.cooldown import CooldownTracker
@@ -94,6 +95,7 @@ class MeanReversionStrategy(Strategy):
         coins: list[str] | None = None,
         interval: str = "15m",
         min_candle_volume_usdc: float = 10_000.0,
+        db: Database | None = None,
     ) -> None:
         self._md = market_data
         self._trend = trend_filter
@@ -106,6 +108,8 @@ class MeanReversionStrategy(Strategy):
         self._signals: dict[str, Signal] = {}
         self._funding_rates: dict[str, float] = {}
         self._max_funding_rate: float = 0.0005  # default, overridden from settings
+        self._db = db
+        self._cycle_count: int = 0
 
     def set_coins(self, coins: list[str]) -> None:
         """Update the list of coins to scan (for dynamic discovery)."""
@@ -119,6 +123,9 @@ class MeanReversionStrategy(Strategy):
     def set_max_funding_rate(self, rate: float) -> None:
         """Set max acceptable funding rate from settings."""
         self._max_funding_rate = rate
+
+    def set_cycle(self, cycle: int) -> None:
+        self._cycle_count = cycle
 
     # ── Lifecycle ────────────────────────────────────────────
 
@@ -290,11 +297,13 @@ class MeanReversionStrategy(Strategy):
             entry_decision = self._check_long_entry(symbol, sig)
             if entry_decision:
                 decisions.append(entry_decision)
+                await self._log_signal(entry_decision, sig)
                 continue  # skip SHORT check — one direction per coin per cycle
 
             entry_decision = self._check_short_entry(symbol, sig)
             if entry_decision:
                 decisions.append(entry_decision)
+                await self._log_signal(entry_decision, sig)
 
         entries = sum(1 for d in decisions if d.action in ("BUY", "SHORT"))
         logger.info(
@@ -453,6 +462,29 @@ class MeanReversionStrategy(Strategy):
             size_pct=10.0,
             order_type="MARKET",
         )
+
+    async def _log_signal(self, decision: Decision, sig: Signal) -> None:
+        if not self._db or self._cycle_count <= 0:
+            return
+        try:
+            await self._db.insert_event(
+                cycle=self._cycle_count,
+                symbol=decision.symbol or "",
+                event_type="SIGNAL",
+                source="mean_reversion",
+                action=decision.action,
+                confidence=decision.confidence,
+                reasoning=decision.reasoning,
+                details={
+                    "rsi": round(sig.rsi, 2) if sig.rsi is not None else None,
+                    "rsi_1h": round(sig.rsi_1h, 2) if sig.rsi_1h is not None else None,
+                    "bb_pct": sig.bb_pct,
+                    "trend": sig.trend,
+                    "volume_ratio": sig.volume_ratio,
+                },
+            )
+        except Exception:
+            logger.debug("Failed to log SIGNAL event", exc_info=True)
 
     # ── State (for snapshot / dashboard) ──────────────────────
 
