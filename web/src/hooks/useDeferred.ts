@@ -9,5 +9,5 @@ export function useDeferred() {
     fetcher,
     { refreshInterval: 10000 }
   );
-  return { deferred: data ?? [], error, isLoading };
+  return { deferred: Array.isArray(data) ? data : [], error, isLoading };
 }

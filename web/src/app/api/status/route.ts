@@ -17,16 +17,13 @@ export function GET() {
         botStatus = JSON.parse(raw);
       }
     } catch {
-      // ignore parse errors
+      // ignore parse errors or missing table
     }
 
-    if (!cycle && !botStatus) {
-      return NextResponse.json({ error: "No cycle data yet" }, { status: 503 });
-    }
-
+    // Always return data — use defaults when tables are empty
     return NextResponse.json({
       cycle: cycle?.cycle ?? (botStatus?.cycle_count as number | undefined) ?? 0,
-      timestamp: cycle?.timestamp ?? (botStatus?.updated_at as string | undefined) ?? "",
+      timestamp: cycle?.timestamp ?? (botStatus?.updated_at as string | undefined) ?? new Date().toISOString(),
       duration_sec: cycle?.duration_sec ?? null,
       balance_usdc: cycle?.balance_usdc ?? balance?.total_usdc ?? 0,
       peak_balance: balance?.peak_balance ?? 0,

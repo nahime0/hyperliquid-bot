@@ -9,5 +9,5 @@ export function useEquity(limit = 500) {
     fetcher,
     { refreshInterval: 30000 }
   );
-  return { snapshots: data ?? [], error, isLoading };
+  return { snapshots: Array.isArray(data) ? data : [], error, isLoading };
 }

@@ -56,7 +56,7 @@ function KpiCards({ status, stats }: { status: DashboardStatus | null; stats: Ag
         }
         trend={
           stats
-            ? <span className="text-[11px] text-text-muted">PF: {stats.profit_factor === Infinity ? "∞" : stats.profit_factor.toFixed(2)}</span>
+            ? <span className="text-[11px] text-text-muted">PF: {stats.profit_factor == null ? "—" : stats.profit_factor === Infinity ? "∞" : stats.profit_factor.toFixed(2)}</span>
             : undefined
         }
       />
@@ -331,21 +331,21 @@ function PerformanceSummary({ stats }: { stats: AggregateStats | null }) {
       <div className="space-y-3">
         <div className="flex items-center justify-between">
           <span className="text-xs text-text-muted">Avg Win</span>
-          <span className="text-sm font-bold font-mono text-profit">{formatUsd(stats.avg_win)}</span>
+          <span className="text-sm font-bold font-mono text-profit">{formatUsd(stats.avg_win ?? 0)}</span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-xs text-text-muted">Avg Loss</span>
-          <span className="text-sm font-bold font-mono text-loss">{formatUsd(stats.avg_loss)}</span>
+          <span className="text-sm font-bold font-mono text-loss">{formatUsd(stats.avg_loss ?? 0)}</span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-xs text-text-muted">Profit Factor</span>
           <span className="text-sm font-bold font-mono text-text-primary">
-            {stats.profit_factor === Infinity ? "∞" : stats.profit_factor.toFixed(2)}
+            {stats.profit_factor == null ? "—" : stats.profit_factor === Infinity ? "∞" : stats.profit_factor.toFixed(2)}
           </span>
         </div>
         <div className="flex items-center justify-between">
           <span className="text-xs text-text-muted">Open Positions</span>
-          <span className="text-sm font-bold font-mono text-accent">{stats.open_position_count}</span>
+          <span className="text-sm font-bold font-mono text-accent">{stats.open_position_count ?? 0}</span>
         </div>
       </div>
     </Card>

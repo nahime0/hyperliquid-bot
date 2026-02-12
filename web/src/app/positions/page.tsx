@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useOpenPositions, useClosedPositions } from "@/hooks/usePositions";
 import { Card, Skeleton } from "@/components/shared/Card";
 import { PnlBadge } from "@/components/shared/PnlBadge";
@@ -113,9 +113,8 @@ function OpenTab() {
         </thead>
         <tbody>
           {positions.map((p) => (
-            <>
+            <Fragment key={p.id}>
               <tr
-                key={p.id}
                 className="border-b border-border/40 hover:bg-bg-card-hover cursor-pointer transition-colors"
                 onClick={() => toggle(p.id)}
               >
@@ -132,13 +131,13 @@ function OpenTab() {
                 <td className="py-2.5 px-3 text-right"><TimeAgo date={p.opened_at} /></td>
               </tr>
               {expanded.has(p.id) && (
-                <tr key={`${p.id}-detail`}>
+                <tr>
                   <td colSpan={11} className="p-3">
                     <PositionDetail position={p} />
                   </td>
                 </tr>
               )}
-            </>
+            </Fragment>
           ))}
         </tbody>
       </table>
@@ -190,9 +189,8 @@ function ClosedTab() {
                 ? (parseTimestamp(p.closed_at).getTime() - parseTimestamp(p.opened_at).getTime()) / 60000
                 : 0;
               return (
-                <>
+                <Fragment key={p.id}>
                   <tr
-                    key={p.id}
                     className="border-b border-border/40 hover:bg-bg-card-hover cursor-pointer transition-colors"
                     onClick={() => toggle(p.id)}
                   >
@@ -210,13 +208,13 @@ function ClosedTab() {
                     <td className="py-2.5 px-3 text-right">{p.closed_at ? <TimeAgo date={p.closed_at} /> : "—"}</td>
                   </tr>
                   {expanded.has(p.id) && (
-                    <tr key={`${p.id}-detail`}>
+                    <tr>
                       <td colSpan={10} className="p-3">
                         <PositionDetail position={p} />
                       </td>
                     </tr>
                   )}
-                </>
+                </Fragment>
               );
             })}
           </tbody>

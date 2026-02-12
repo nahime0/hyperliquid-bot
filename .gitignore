@@ -28,6 +28,7 @@ ENV/
 data/trading_bot.db
 data/trading_bot.db-wal
 data/trading_bot.db-shm
+data/bak
 
 # Runtime data
 data/bot_status.json

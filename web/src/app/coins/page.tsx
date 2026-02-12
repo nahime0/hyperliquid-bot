@@ -19,8 +19,9 @@ export default function CoinsPage() {
     { refreshInterval: 30000 }
   );
 
-  const activeCount = coins?.filter(c => c.is_active).length ?? 0;
-  const inactiveCount = (coins?.length ?? 0) - activeCount;
+  const coinList = Array.isArray(coins) ? coins : [];
+  const activeCount = coinList.filter(c => c.is_active).length;
+  const inactiveCount = coinList.length - activeCount;
 
   return (
     <div>
@@ -47,11 +48,11 @@ export default function CoinsPage() {
             <Skeleton key={i} className="w-full h-28 rounded-xl" />
           ))}
         </div>
-      ) : !coins || coins.length === 0 ? (
+      ) : coinList.length === 0 ? (
         <EmptyState title="No coins found" description="Coins will appear here as the bot discovers them" />
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3">
-          {coins.map((coin) => (
+          {coinList.map((coin) => (
             <Link
               key={coin.symbol}
               href={`/coins/${coin.symbol}`}

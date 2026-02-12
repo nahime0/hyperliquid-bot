@@ -9,7 +9,7 @@ export function useOpenPositions() {
     fetcher,
     { refreshInterval: 5000 }
   );
-  return { positions: data ?? [], error, isLoading };
+  return { positions: Array.isArray(data) ? data : [], error, isLoading };
 }
 
 export function useClosedPositions(limit = 50, offset = 0) {
@@ -18,5 +18,5 @@ export function useClosedPositions(limit = 50, offset = 0) {
     fetcher,
     { refreshInterval: 10000 }
   );
-  return { positions: data ?? [], error, isLoading };
+  return { positions: Array.isArray(data) ? data : [], error, isLoading };
 }

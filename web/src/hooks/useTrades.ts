@@ -9,5 +9,5 @@ export function useTrades(limit = 50, offset = 0) {
     fetcher,
     { refreshInterval: 10000 }
   );
-  return { trades: data ?? [], error, isLoading };
+  return { trades: Array.isArray(data) ? data : [], error, isLoading };
 }

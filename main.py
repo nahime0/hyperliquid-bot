@@ -142,6 +142,12 @@ class Bot:
         # Funding rate cache
         self._funding_cache: dict[str, float] = {}
 
+        # Asset context cache (funding, OI, mark price — refreshed each cycle)
+        self._asset_ctx_map: dict[str, dict[str, Any]] = {}
+
+        # Open interest snapshots for 4h change calculation
+        self._oi_snapshots: dict[str, list[tuple[float, float]]] = {}
+
         # Bookkeeping
         self._last_balance_snapshot: float = 0.0
         self._cycle_count: int = 0
@@ -336,6 +342,9 @@ class Bot:
         if self._cycle_count % FUNDING_REFRESH_INTERVAL == 1:
             await self._refresh_funding()
 
+        # 3b. Refresh asset contexts (funding + OI for all coins)
+        asset_ctx_map = await self._fetch_asset_contexts()
+
         # 4. Update strategies
         await self._trend_filter.update(self._active_coins)
         await self._strategy.update()
@@ -394,6 +403,11 @@ class Bot:
         # 6. AI advisor call
         open_positions = await self._positions.get_open_positions()
 
+        # Pre-fetch order books for positions + opportunity coins
+        ob_coins: set[str] = {pos["symbol"] for pos in open_positions}
+        ob_coins |= {d.symbol for d in candidates if d.symbol and d.action in ("BUY", "SHORT")}
+        order_books = await self._fetch_order_books(ob_coins) if ob_coins else {}
+
         # Enrich positions with current prices, PnL, indicators
         now_utc = datetime.now(timezone.utc)
         for pos in open_positions:
@@ -410,8 +424,11 @@ class Bot:
             if pos.get("opened_at"):
                 opened = datetime.fromisoformat(pos["opened_at"].replace("Z", "+00:00"))
                 pos["age_minutes"] = round((now_utc - opened).total_seconds() / 60, 1)
-            # Add indicators from market data
+            # Add indicators and market context from market data
             pos["indicators"] = self._get_indicators(pos["symbol"])
+            pos["market_context"] = self._get_market_context(
+                pos["symbol"], asset_ctx_map=asset_ctx_map, order_books=order_books,
+            )
 
         # Build opportunity list from candidates (entries only)
         opportunities = []
@@ -428,6 +445,9 @@ class Bot:
                     "proposed_take_profit": d.take_profit,
                     "proposed_size_pct": d.size_pct,
                     "indicators": self._get_indicators(d.symbol) if d.symbol else {},
+                    "market_context": self._get_market_context(
+                        d.symbol, asset_ctx_map=asset_ctx_map, order_books=order_books,
+                    ) if d.symbol else {},
                 }
                 opportunities.append(opp)
 
@@ -934,6 +954,185 @@ class Bot:
                 return {k: v for k, v in indicators.items() if v is not None}
 
         return indicators
+
+    async def _fetch_asset_contexts(self) -> dict[str, dict[str, Any]]:
+        """Fetch funding rates, OI, mark prices for all coins (single API call)."""
+        try:
+            meta, ctxs = await self._client.get_meta_and_asset_ctxs()
+            universe = meta.get("universe", [])
+            mapping: dict[str, dict[str, Any]] = {}
+            now = time.time()
+            for asset, ctx in zip(universe, ctxs):
+                coin = asset["name"]
+                mapping[coin] = ctx
+                # Update OI snapshot cache
+                oi = float(ctx.get("openInterest", 0))
+                if coin not in self._oi_snapshots:
+                    self._oi_snapshots[coin] = []
+                self._oi_snapshots[coin].append((now, oi))
+                # Trim to ~5h of history
+                cutoff = now - 5 * 3600
+                self._oi_snapshots[coin] = [
+                    (t, v) for t, v in self._oi_snapshots[coin] if t >= cutoff
+                ]
+            self._asset_ctx_map = mapping
+            return mapping
+        except Exception:
+            logger.warning("Failed to fetch asset contexts", exc_info=True)
+            return self._asset_ctx_map
+
+    async def _fetch_order_books(self, coins: set[str]) -> dict[str, dict[str, Any]]:
+        """Fetch L2 order book snapshots for specific coins (concurrent)."""
+        books: dict[str, dict[str, Any]] = {}
+        sem = asyncio.Semaphore(5)
+
+        async def _fetch_one(coin: str) -> None:
+            async with sem:
+                try:
+                    books[coin] = await self._client.get_l2_snapshot(coin)
+                except Exception:
+                    logger.debug("Failed to fetch L2 for %s", coin, exc_info=True)
+
+        await asyncio.gather(*[_fetch_one(c) for c in coins])
+        return books
+
+    def _get_oi_change_4h(self, coin: str) -> float | None:
+        """Compute OI change % over the last ~4 hours from cached snapshots."""
+        snapshots = self._oi_snapshots.get(coin, [])
+        if len(snapshots) < 2:
+            return None
+        now = time.time()
+        target_time = now - 4 * 3600
+        best = min(snapshots, key=lambda x: abs(x[0] - target_time))
+        # Must have data within 1h of the 4h-ago target
+        if abs(best[0] - target_time) > 3600:
+            return None
+        current_oi = snapshots[-1][1]
+        old_oi = best[1]
+        if old_oi <= 0:
+            return None
+        return round((current_oi - old_oi) / old_oi * 100, 3)
+
+    def _get_market_context(self, symbol: str, *, asset_ctx_map: dict[str, dict[str, Any]] | None = None, order_books: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+        """Build enriched market context for AI advisor.
+
+        Returns price action (last 12 5m candles), % changes (1h/4h/24h),
+        support/resistance levels (4h/24h), and 4h trend from 1h EMAs.
+        """
+        ctx: dict[str, Any] = {}
+        price = self._market_data.get_mid_price(symbol)
+        if not price or price <= 0:
+            return ctx
+
+        # ── Price action: last 12 candles 5m (~60 min) ──
+        candles_5m = self._market_data.get_candles(symbol, "5m")
+        if candles_5m is not None and len(candles_5m) >= 12:
+            last_12 = candles_5m.tail(12)
+            ctx["price_action_5m"] = [
+                {
+                    "o": round(float(row["open"]), 6),
+                    "h": round(float(row["high"]), 6),
+                    "l": round(float(row["low"]), 6),
+                    "c": round(float(row["close"]), 6),
+                    "v": round(float(row["volume"]), 2),
+                }
+                for _, row in last_12.iterrows()
+            ]
+
+        # ── % changes: 1h, 4h, 24h ──
+        if candles_5m is not None and len(candles_5m) >= 12:
+            try:
+                price_1h_ago = float(candles_5m["close"].iloc[-12])
+                ctx["change_1h_pct"] = round((price - price_1h_ago) / price_1h_ago * 100, 3)
+            except (IndexError, ZeroDivisionError):
+                pass
+            if len(candles_5m) >= 48:
+                try:
+                    price_4h_ago = float(candles_5m["close"].iloc[-48])
+                    ctx["change_4h_pct"] = round((price - price_4h_ago) / price_4h_ago * 100, 3)
+                except (IndexError, ZeroDivisionError):
+                    pass
+
+        candles_1h = self._market_data.get_candles(symbol, "1h")
+        if candles_1h is not None and len(candles_1h) >= 24:
+            try:
+                price_24h_ago = float(candles_1h["close"].iloc[-24])
+                ctx["change_24h_pct"] = round((price - price_24h_ago) / price_24h_ago * 100, 3)
+            except (IndexError, ZeroDivisionError):
+                pass
+
+        # ── Support / Resistance: high/low over 4h and 24h windows ──
+        if candles_1h is not None:
+            if len(candles_1h) >= 4:
+                tail4 = candles_1h.tail(4)
+                ctx["support_4h"] = round(float(tail4["low"].min()), 6)
+                ctx["resistance_4h"] = round(float(tail4["high"].max()), 6)
+            if len(candles_1h) >= 24:
+                tail24 = candles_1h.tail(24)
+                ctx["support_24h"] = round(float(tail24["low"].min()), 6)
+                ctx["resistance_24h"] = round(float(tail24["high"].max()), 6)
+
+        # ── Trend 4h: EMA12/EMA26 on 1h candles ──
+        if candles_1h is not None and len(candles_1h) >= 30:
+            close_1h = candles_1h["close"]
+            ema12 = close_1h.ewm(span=12, adjust=False).mean()
+            ema26 = close_1h.ewm(span=26, adjust=False).mean()
+            ema12_now = float(ema12.iloc[-1])
+            ema26_now = float(ema26.iloc[-1])
+            # Slope: EMA12 change over last 5 candles (5h) as % of price
+            ema12_5ago = float(ema12.iloc[-5]) if len(ema12) >= 5 else ema12_now
+            slope = (ema12_now - ema12_5ago) / price * 100
+
+            if ema12_now > ema26_now and price > ema12_now and slope > 0:
+                trend_4h = "BULLISH"
+            elif ema12_now < ema26_now and price < ema12_now and slope < 0:
+                trend_4h = "BEARISH"
+            else:
+                trend_4h = "NEUTRAL"
+
+            ctx["trend_4h"] = trend_4h
+            ctx["ema12_1h"] = round(ema12_now, 6)
+            ctx["ema26_1h"] = round(ema26_now, 6)
+
+        # ── Order book: top 5 bid/ask levels ──
+        if order_books and symbol in order_books:
+            try:
+                levels = order_books[symbol].get("levels", [])
+                if len(levels) >= 2:
+                    bids = levels[0][:5]
+                    asks = levels[1][:5]
+                    ctx["order_book"] = {
+                        "bids": [{"price": float(b["px"]), "size": float(b["sz"])} for b in bids],
+                        "asks": [{"price": float(a["px"]), "size": float(a["sz"])} for a in asks],
+                    }
+            except (KeyError, ValueError, TypeError):
+                pass
+
+        # ── Funding rate (current) ──
+        if asset_ctx_map and symbol in asset_ctx_map:
+            actx = asset_ctx_map[symbol]
+            try:
+                funding = float(actx.get("funding", 0))
+                ctx["funding_rate"] = round(funding, 8)
+                # Annualized for context (funding applied every 8h → 3x/day → 1095x/year)
+                ctx["funding_rate_annualized_pct"] = round(funding * 3 * 365 * 100, 2)
+            except (ValueError, TypeError):
+                pass
+            try:
+                ctx["open_interest"] = round(float(actx.get("openInterest", 0)), 4)
+            except (ValueError, TypeError):
+                pass
+            try:
+                ctx["mark_price"] = float(actx.get("markPx", 0))
+            except (ValueError, TypeError):
+                pass
+
+        # ── OI change % over ~4h ──
+        oi_change = self._get_oi_change_4h(symbol)
+        if oi_change is not None:
+            ctx["oi_change_4h_pct"] = oi_change
+
+        return ctx
 
     # ── Order execution ──────────────────────────────────────
 

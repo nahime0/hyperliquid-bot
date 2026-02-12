@@ -272,7 +272,7 @@ class TestDeferredPersistence:
         assert len(rows) == 0
 
     @pytest.mark.asyncio
-    async def test_load_deferred_restores_from_db(self, db):
+    async def test_load_deferred_clears_stale_on_startup(self, db):
         # Manually insert into DB (simulating previous session)
         await db.upsert_deferred("BTC", "SHORT", 3, {"wait_cycles": 5}, "opportunity")
         await db.upsert_deferred("ETH", "HOLD", 2, {"wait_until_price_below": 2000}, "hold")
@@ -280,11 +280,13 @@ class TestDeferredPersistence:
         advisor = AIAdvisor(model="haiku", db=db)
         await advisor.load_deferred()
 
-        assert "BTC" in advisor.deferred_symbols
-        assert "ETH" in advisor.deferred_hold_symbols
-        assert advisor._deferred["BTC"].original_action == "SHORT"
-        assert advisor._deferred["BTC"].deferred_at_cycle == 3
-        assert advisor._deferred_holds["ETH"].conditions == {"wait_until_price_below": 2000}
+        # All deferred should be cleared on startup
+        assert len(advisor.deferred_symbols) == 0
+        assert len(advisor.deferred_hold_symbols) == 0
+
+        # DB should also be empty
+        rows = await db.get_all_deferred()
+        assert len(rows) == 0
 
     @pytest.mark.asyncio
     async def test_load_deferred_empty_db(self, db):

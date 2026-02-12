@@ -154,30 +154,20 @@ class AIAdvisor:
     # ── Load from DB (startup) ──────────────────────────────
 
     async def load_deferred(self) -> None:
-        """Reload deferred opportunities and holds from DB at startup."""
+        """Clear all deferred on startup — stale after restart."""
         if not self._db:
             return
         try:
             rows = await self._db.get_all_deferred()
-            for row in rows:
-                opp = DeferredOpportunity(
-                    symbol=row["symbol"],
-                    original_action=row["original_action"],
-                    deferred_at_cycle=row["deferred_at_cycle"],
-                    conditions=row["conditions"],
-                )
-                if row["type"] == "hold":
-                    self._deferred_holds[row["symbol"]] = opp
-                else:
-                    self._deferred[row["symbol"]] = opp
-            total = len(self._deferred) + len(self._deferred_holds)
-            if total:
-                logger.info(
-                    "Loaded %d deferred from DB (%d opportunities, %d holds)",
-                    total, len(self._deferred), len(self._deferred_holds),
-                )
+            count = len(rows)
+            if count:
+                for row in rows:
+                    await self._db.delete_deferred(row["symbol"], row["type"])
+                logger.info("Cleared %d stale deferred entries on startup", count)
         except Exception:
-            logger.warning("Failed to load deferred from DB", exc_info=True)
+            logger.warning("Failed to clear deferred from DB", exc_info=True)
+        self._deferred.clear()
+        self._deferred_holds.clear()
 
     # ── Shared condition checker ────────────────────────────
 

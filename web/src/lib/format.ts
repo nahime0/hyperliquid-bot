@@ -1,5 +1,5 @@
 export function formatUsd(value: number): string {
-  return value.toLocaleString("en-US", {
+  return (value ?? 0).toLocaleString("en-US", {
     style: "currency",
     currency: "USD",
     minimumFractionDigits: 2,
@@ -8,19 +8,22 @@ export function formatUsd(value: number): string {
 }
 
 export function formatPrice(value: number): string {
-  if (value >= 1000) return value.toLocaleString("en-US", { maximumFractionDigits: 2 });
-  if (value >= 1) return value.toLocaleString("en-US", { maximumFractionDigits: 4 });
-  if (value >= 0.01) return value.toLocaleString("en-US", { maximumFractionDigits: 6 });
-  return value.toLocaleString("en-US", { maximumFractionDigits: 8 });
+  const v = value ?? 0;
+  if (v >= 1000) return v.toLocaleString("en-US", { maximumFractionDigits: 2 });
+  if (v >= 1) return v.toLocaleString("en-US", { maximumFractionDigits: 4 });
+  if (v >= 0.01) return v.toLocaleString("en-US", { maximumFractionDigits: 6 });
+  return v.toLocaleString("en-US", { maximumFractionDigits: 8 });
 }
 
 export function formatPct(value: number): string {
-  return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+  const v = value ?? 0;
+  return `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
 }
 
 export function formatPnl(value: number): string {
-  const sign = value >= 0 ? "+" : "";
-  return `${sign}${formatUsd(value)}`;
+  const v = value ?? 0;
+  const sign = v >= 0 ? "+" : "";
+  return `${sign}${formatUsd(v)}`;
 }
 
 export function parseTimestamp(isoString: string): Date {

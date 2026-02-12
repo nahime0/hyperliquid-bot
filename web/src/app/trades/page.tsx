@@ -45,17 +45,17 @@ export default function TradesPage() {
           />
           <StatCard
             label="Avg Win"
-            value={<span className="text-profit">{formatUsd(stats.avg_win)}</span>}
+            value={<span className="text-profit">{formatUsd(stats.avg_win ?? 0)}</span>}
           />
           <StatCard
             label="Avg Loss"
-            value={<span className="text-loss">{formatUsd(stats.avg_loss)}</span>}
+            value={<span className="text-loss">{formatUsd(stats.avg_loss ?? 0)}</span>}
           />
           <StatCard
             label="Profit Factor"
             value={
               <span className="text-text-primary">
-                {stats.profit_factor === Infinity ? "∞" : stats.profit_factor.toFixed(2)}
+                {stats.profit_factor == null ? "—" : stats.profit_factor === Infinity ? "∞" : stats.profit_factor.toFixed(2)}
               </span>
             }
           />

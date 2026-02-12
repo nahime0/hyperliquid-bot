@@ -79,27 +79,27 @@ function AiStatsCards() {
         value={<span className="text-profit">{stats.executed_count}</span>}
         trend={
           <span className="text-[11px] text-text-muted">
-            Rate: {formatPct(stats.execution_rate * 100)}
+            Rate: {formatPct((stats.execution_rate ?? 0) * 100)}
           </span>
         }
       />
       <StatCard
         label="Avg Confidence"
         value={
-          <span className={`${stats.avg_confidence >= 0.6 ? "text-profit" : "text-warning"}`}>
-            {formatPct(stats.avg_confidence * 100)}
+          <span className={`${(stats.avg_confidence ?? 0) >= 0.6 ? "text-profit" : "text-warning"}`}>
+            {formatPct((stats.avg_confidence ?? 0) * 100)}
           </span>
         }
       />
       <StatCard
         label="Total Cost"
-        value={<span className="text-text-primary">{formatUsd(stats.total_cost_usd)}</span>}
+        value={<span className="text-text-primary">{formatUsd(stats.total_cost_usd ?? 0)}</span>}
       />
       <StatCard
         label="By Tier"
         value={
           <div className="flex flex-wrap gap-1">
-            {stats.by_tier.map((t) => (
+            {(stats.by_tier ?? []).map((t) => (
               <span key={t.tier} className="text-xs text-text-muted">
                 <TierBadge tier={t.tier} />
                 <span className="ml-0.5 font-mono">{t.cnt}</span>
