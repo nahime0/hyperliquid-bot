@@ -1,7 +1,7 @@
 """Trend Filter — EMA50/EMA200 on 1h candles.
 
 Classifies each symbol as BULLISH, BEARISH, or NEUTRAL.
-Used as a gate: BUY entries are only allowed when trend is BULLISH.
+Used as a gate: MR LONG allows BULLISH+NEUTRAL, MR SHORT requires BEARISH.
 """
 from __future__ import annotations
 

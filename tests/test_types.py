@@ -28,7 +28,7 @@ class TestDecision:
         assert d.take_profit == 2100.0
 
     def test_decision_all_actions(self):
-        for action in ("BUY", "SHORT", "SELL", "HOLD", "CLOSE"):
+        for action in ("BUY", "SHORT", "SELL", "HOLD", "CLOSE", "SCALE_UP"):
             d = Decision(action=action, confidence=0.5, reasoning="test")
             assert d.action == action
 

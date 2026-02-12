@@ -7,13 +7,14 @@
         "type": "object",
         "properties": {
           "symbol": { "type": "string" },
-          "action": { "enum": ["HOLD", "CLOSE", "ADJUST"] },
+          "action": { "enum": ["HOLD", "CLOSE", "ADJUST", "SCALE_UP"] },
           "adjustments": {
             "type": "object",
             "properties": {
               "stop_loss": { "type": "number" },
               "take_profit": { "type": "number" },
-              "leverage": { "type": "integer", "minimum": 1, "maximum": 10 }
+              "leverage": { "type": "integer", "minimum": 1, "maximum": 10 },
+              "size_pct": { "type": "number" }
             }
           },
           "defer": {

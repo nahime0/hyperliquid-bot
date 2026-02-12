@@ -296,6 +296,38 @@ class PositionTracker:
             }
         return None
 
+    async def scale_position(
+        self,
+        position_id: int,
+        additional_qty: float,
+        fill_price: float,
+    ) -> None:
+        """Scale up an existing position: VWAP entry price, sum quantity."""
+        pos = await self._get_by_id(position_id)
+        if not pos:
+            raise ValueError(f"Position #{position_id} not found")
+        if pos["status"] != "OPEN":
+            raise ValueError(f"Position #{position_id} is not OPEN")
+
+        old_qty = pos["quantity"]
+        old_entry = pos["entry_price"]
+
+        # VWAP entry price
+        new_qty = old_qty + additional_qty
+        new_entry = (old_entry * old_qty + fill_price * additional_qty) / new_qty
+
+        await self._db.db.execute(
+            "UPDATE positions SET entry_price=?, quantity=? WHERE id=?",
+            (new_entry, new_qty, position_id),
+        )
+        await self._db.db.commit()
+
+        logger.info(
+            "Position scaled #%d %s: qty %.6f→%.6f, entry %.4f→%.4f (added %.6f @ %.4f)",
+            position_id, pos["symbol"], old_qty, new_qty, old_entry, new_entry,
+            additional_qty, fill_price,
+        )
+
     async def update_sl_tp(
         self,
         position_id: int,

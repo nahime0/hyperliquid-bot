@@ -60,6 +60,7 @@ class PositionSizer:
         trade_stats: dict[str, Any],
         ai_confidence: float,
         ai_size_pct: float | None = None,
+        utilization_boost: float = 1.0,
     ) -> SizeResult:
         """Return how much USDC to allocate for this trade.
 
@@ -72,7 +73,9 @@ class PositionSizer:
         ai_confidence : float
             AI decision confidence (0-1).
         ai_size_pct : float | None
-            Size requested by the AI (0-10 %); used as a soft hint, never blindly trusted.
+            Size requested by the AI (0-15 %); used as a soft hint, never blindly trusted.
+        utilization_boost : float
+            Multiplier from capital utilization logic (1.0 = no boost, up to max_size_boost).
         """
         total_trades = trade_stats.get("total_trades", 0)
         max_pct = self._config.max_trade_pct
@@ -83,6 +86,10 @@ class PositionSizer:
         # by confidence again here — that would double-penalise.
         if total_trades < COLD_START_TRADES:
             size_pct = COLD_START_PCT
+
+            # Apply utilization boost
+            if utilization_boost > 1.0:
+                size_pct *= utilization_boost
 
             # AI hint as soft cap
             if ai_size_pct is not None and ai_size_pct > 0:
@@ -135,6 +142,10 @@ class PositionSizer:
 
         # Convert to percentage
         size_pct = fraction * 100
+
+        # Apply utilization boost
+        if utilization_boost > 1.0:
+            size_pct *= utilization_boost
 
         # --- Caps ---
         capped = False

@@ -86,8 +86,10 @@ claude -p "<json_payload>" \
   "account": {
     "balance_usdc": 1000, "daily_pnl_pct": -0.5,
     "total_pnl": 50, "win_rate": 0.65,
-    "open_position_count": 1, "max_positions": 5,
-    "consecutive_losses": 0
+    "open_position_count": 1, "max_positions": 15,
+    "consecutive_losses": 0,
+    "capital_utilization_pct": 7.0, "total_margin_used": 70.0,
+    "available_margin": 930.0, "target_utilization_pct": 50.0
   },
   "recent_trades": [ ... ],
   "trade_stats": { "total_trades": 42, "win_rate": 0.62, "avg_win": 8.5, "avg_loss": -5.2 }
@@ -123,6 +125,7 @@ claude -p "<json_payload>" \
 | `HOLD` | Nessuna azione (trailing stop/time stop continuano) |
 | `CLOSE` | Chiusura immediata della posizione |
 | `ADJUST` | Modifica SL, TP, o leverage tramite `adjustments` |
+| `SCALE_UP` | Aggiunge margine a una posizione in profitto (VWAP entry). Richiede `size_pct` in `adjustments` |
 
 ### Azioni per opportunita'
 
@@ -171,14 +174,13 @@ Il file `schemas/ai_advisor_output.json` definisce la struttura dell'output enfo
 | `AI_MIN_CONFIDENCE` | `0.6` | Sotto questa soglia → HOLD forzato |
 | `AI_FALLBACK_ON_ERROR` | `HOLD` | Azione di default se l'AI non risponde |
 | `AI_LOG_REASONING` | `true` | Logga il reasoning dell'AI |
-| `AI_MAX_SPREAD_PCT` | `0.5` | Spread massimo per screening |
 
 ## Decision Dataclass
 
 ```python
 @dataclass
 class Decision:
-    action: str           # BUY, SHORT, SELL, HOLD, CLOSE
+    action: str           # BUY, SHORT, SELL, HOLD, CLOSE, SCALE_UP
     confidence: float     # 0-1
     reasoning: str
     symbol: str | None
