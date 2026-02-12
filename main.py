@@ -1312,7 +1312,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--paper", action="store_true", help="Paper trading (log decisions, no real orders)")
     parser.add_argument("--no-ai", action="store_true", help="Disable AI review, use pure rule-based trading")
     parser.add_argument("--once", action="store_true", help="Run one cycle then exit")
-    parser.add_argument("--reset-kill-switch", action="store_true", help="Reset persistent kill switch and exit")
     parser.add_argument(
         "--strategy",
         choices=["multi", "mean_reversion", "rsi_div"],
@@ -1326,21 +1325,6 @@ async def async_main() -> None:
     args = parse_args()
     settings = load_settings()
     setup_logging(settings.log_level)
-
-    # Reset kill switch utility
-    if args.reset_kill_switch:
-        db = Database(settings.db_path)
-        await db.connect()
-        ks = await db.get_state("kill_switch")
-        reason = await db.get_state("kill_reason")
-        if ks:
-            await db.delete_state("kill_switch")
-            await db.delete_state("kill_reason")
-            logger.info("Kill switch RESET (was: %s)", reason or "unknown")
-        else:
-            logger.info("Kill switch was not active")
-        await db.close()
-        return
 
     # Override testnet based on CLI flags
     if args.live:

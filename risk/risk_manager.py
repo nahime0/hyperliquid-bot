@@ -95,17 +95,6 @@ class RiskManager:
         3. Only use DB peak if it's from a consistent session (same ballpark)
         This handles: fresh wallets, wallet changes, manual web trades, crashes.
         """
-        # Step 0: Restore kill switch from DB
-        try:
-            ks = await self._db.get_state("kill_switch")
-            if ks == "1":
-                reason = await self._db.get_state("kill_reason") or "restored from DB"
-                self._kill_switch = True
-                self._kill_reason = reason
-                logger.warning("Kill switch RESTORED from DB: %s", reason)
-        except Exception:
-            logger.debug("Failed to restore kill switch from DB", exc_info=True)
-
         # Step 1: Live state from Hyperliquid
         await self.refresh()
 
@@ -460,11 +449,6 @@ class RiskManager:
         self._kill_switch = True
         self._kill_reason = reason
         logger.critical("KILL SWITCH ACTIVATED: %s", reason)
-        try:
-            await self._db.set_state("kill_switch", "1")
-            await self._db.set_state("kill_reason", reason)
-        except Exception:
-            logger.debug("Failed to persist kill switch to DB", exc_info=True)
 
     async def reset_kill_switch(self) -> None:
         """Manual reset (operator override)."""
@@ -472,11 +456,6 @@ class RiskManager:
             logger.warning("Kill switch RESET manually (was: %s)", self._kill_reason)
         self._kill_switch = False
         self._kill_reason = ""
-        try:
-            await self._db.delete_state("kill_switch")
-            await self._db.delete_state("kill_reason")
-        except Exception:
-            logger.debug("Failed to delete kill switch from DB", exc_info=True)
 
     def _check_daily_pause(self) -> None:
         dd = self._daily_drawdown_pct()
