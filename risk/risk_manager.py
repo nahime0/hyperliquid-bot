@@ -177,11 +177,7 @@ class RiskManager:
         if decision.action == "HOLD":
             return ValidationResult(approved=True, decision=decision, reason="pass-through")
 
-        # CLOSE/SELL: enforce minimum holding period
-        if decision.action in ("CLOSE", "SELL") and decision.symbol:
-            block = await self._check_holding_period(decision)
-            if block:
-                return block
+        # CLOSE/SELL: always allowed (SL/TP and AI exits must not be delayed)
 
         # ── Kill switch ──
         if self._kill_switch:
