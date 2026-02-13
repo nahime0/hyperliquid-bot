@@ -240,7 +240,8 @@ class PositionTracker:
         old_trailing = pos.get("trailing_sl") or pos.get("stop_loss") or 0.0
 
         new_max = max(max_seen, current_price)
-        gain_pct = (new_max - entry) / entry * 100 if entry > 0 else 0
+        # Use CURRENT price for tier selection (not max) — avoid moving SL when at a loss
+        current_gain_pct = (current_price - entry) / entry * 100 if entry > 0 else 0
 
         # ATR-based trailing distances with fixed % fallback
         atr = self._get_atr_trailing_distance(pos["symbol"], current_price)
@@ -249,13 +250,13 @@ class PositionTracker:
 
         new_trailing = old_trailing
 
-        if gain_pct >= self._rc.trailing_tight_pct:
+        if current_gain_pct >= self._rc.trailing_tight_pct:
             new_trailing = new_max * (1 - tight_pct / 100)
-        elif gain_pct >= self._rc.trailing_start_pct:
+        elif current_gain_pct >= self._rc.trailing_start_pct:
             new_trailing = new_max * (1 - trail_pct / 100)
-        elif gain_pct >= self._rc.trailing_breakeven_pct:
+        elif current_gain_pct >= self._rc.trailing_breakeven_pct:
             new_trailing = entry
-        elif gain_pct >= self._rc.trailing_half_pct:
+        elif current_gain_pct >= self._rc.trailing_half_pct:
             # Midpoint between original SL and entry — reduce risk without breakeven
             original_sl = pos.get("original_sl") or pos.get("stop_loss") or 0.0
             new_trailing = (entry + original_sl) / 2
@@ -273,7 +274,7 @@ class PositionTracker:
             if new_trailing > old_trailing:
                 logger.info(
                     "Trailing SL updated #%d %s LONG: %g → %g (gain=%.2f%%, max=%g)",
-                    pos["id"], pos["symbol"], old_trailing, new_trailing, gain_pct, new_max,
+                    pos["id"], pos["symbol"], old_trailing, new_trailing, current_gain_pct, new_max,
                 )
                 if self._cycle_count > 0:
                     try:
@@ -286,7 +287,7 @@ class PositionTracker:
                                 "direction": "LONG",
                                 "old_sl": round(old_trailing, 6),
                                 "new_sl": round(new_trailing, 6),
-                                "gain_pct": round(gain_pct, 2),
+                                "gain_pct": round(current_gain_pct, 2),
                                 "max_seen": round(new_max, 6),
                             },
                             position_id=pos["id"],
@@ -300,7 +301,8 @@ class PositionTracker:
         old_trailing = pos.get("trailing_sl") or pos.get("stop_loss") or float("inf")
 
         new_min = min(min_seen, current_price)
-        gain_pct = (entry - new_min) / entry * 100 if entry > 0 else 0
+        # Use CURRENT price for tier selection (not min) — avoid moving SL when at a loss
+        current_gain_pct = (entry - current_price) / entry * 100 if entry > 0 else 0
 
         # ATR-based trailing distances with fixed % fallback
         atr = self._get_atr_trailing_distance(pos["symbol"], current_price)
@@ -309,13 +311,13 @@ class PositionTracker:
 
         new_trailing = old_trailing
 
-        if gain_pct >= self._rc.trailing_tight_pct:
+        if current_gain_pct >= self._rc.trailing_tight_pct:
             new_trailing = new_min * (1 + tight_pct / 100)
-        elif gain_pct >= self._rc.trailing_start_pct:
+        elif current_gain_pct >= self._rc.trailing_start_pct:
             new_trailing = new_min * (1 + trail_pct / 100)
-        elif gain_pct >= self._rc.trailing_breakeven_pct:
+        elif current_gain_pct >= self._rc.trailing_breakeven_pct:
             new_trailing = entry
-        elif gain_pct >= self._rc.trailing_half_pct:
+        elif current_gain_pct >= self._rc.trailing_half_pct:
             # Midpoint between original SL and entry — reduce risk without breakeven
             original_sl = pos.get("original_sl") or pos.get("stop_loss") or float("inf")
             new_trailing = (entry + original_sl) / 2
@@ -333,7 +335,7 @@ class PositionTracker:
             if new_trailing < old_trailing:
                 logger.info(
                     "Trailing SL updated #%d %s SHORT: %g → %g (gain=%.2f%%, min=%g)",
-                    pos["id"], pos["symbol"], old_trailing, new_trailing, gain_pct, new_min,
+                    pos["id"], pos["symbol"], old_trailing, new_trailing, current_gain_pct, new_min,
                 )
                 if self._cycle_count > 0:
                     try:
@@ -346,7 +348,7 @@ class PositionTracker:
                                 "direction": "SHORT",
                                 "old_sl": round(old_trailing, 6),
                                 "new_sl": round(new_trailing, 6),
-                                "gain_pct": round(gain_pct, 2),
+                                "gain_pct": round(current_gain_pct, 2),
                                 "min_seen": round(new_min, 6),
                             },
                             position_id=pos["id"],
