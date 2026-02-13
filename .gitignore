@@ -25,13 +25,14 @@ ENV/
 .DS_Store
 
 # Database
-data/trading_bot.db
-data/trading_bot.db-wal
-data/trading_bot.db-shm
+data/*.db
+data/*.db-wal
+data/*.db-shm
 data/bak
 
 # Runtime data
 data/bot_status.json
+data/ai_context/
 logs/
 *.log
 

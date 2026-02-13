@@ -37,8 +37,8 @@ HL_PRIVATE_KEY=0x...your_private_key...
 HL_ACCOUNT_ADDRESS=0x...your_address...
 HL_TESTNET=true
 
-# Obbligatorio per AI (opzionale con --no-ai)
-ANTHROPIC_API_KEY=sk-ant-api03-...
+# AI Advisor (opzionale con --no-ai)
+AI_ADVISOR=claude
 ```
 
 ## Verifica connessione

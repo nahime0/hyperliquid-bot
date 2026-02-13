@@ -308,7 +308,7 @@ HL_MAX_FUNDING_RATE=0.0005     # max funding rate accettabile
 
 # AI Advisor (opzionale, richiede Claude Code CLI)
 AI_MODEL=opus              # modello (opus, sonnet, haiku)
-AI_TIMEOUT=120             # timeout secondi
+AI_TIMEOUT=180             # timeout secondi
 
 # Telegram (opzionale)
 TELEGRAM_BOT_TOKEN=
@@ -515,11 +515,11 @@ binance/
 |---|---|---|
 | `AI_DECISION_INTERVAL` | `60` | Secondi tra un ciclo e l'altro |
 | `AI_MODEL` | `opus` | Modello Claude Code (`opus`, `sonnet`, `haiku`) |
-| `AI_TIMEOUT` | `120` | Timeout per la chiamata CLI (secondi) |
+| `AI_TIMEOUT` | `180` | Timeout per la chiamata CLI (secondi) |
 | `AI_MIN_CONFIDENCE` | `0.6` | Sotto questa soglia → HOLD forzato |
 | `AI_FALLBACK_ON_ERROR` | `HOLD` | Azione di default se l'AI non risponde |
 | `AI_LOG_REASONING` | `true` | Logga il reasoning dell'AI |
-| `AI_MAX_SPREAD_PCT` | `0.5` | Spread massimo per screening |
+| `AI_ADVISOR` | `claude` | Backend AI (`claude` o `cursor`) |
 
 ### Risk Management
 
