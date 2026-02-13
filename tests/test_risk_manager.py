@@ -145,7 +145,22 @@ class TestValidation:
         d = Decision(action="BUY", confidence=0.3, reasoning="weak", symbol="ETH")
         result = await rm.validate_decision(d)
         assert result.approved is False
-        assert "too low" in result.reason
+        assert "below minimum" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_validate_custom_min_confidence(self, db, risk_config):
+        """min_confidence from config is respected (not hardcoded 0.5)."""
+        client = MockClient(balance=1000.0)
+        pt = PositionTracker(db, risk_config)
+        rm = RiskManager(risk_config, client, db, position_tracker=pt, ai_min_confidence=0.70)
+        rm._current_balance = 1000.0
+        rm._peak_balance = 1000.0
+        rm._open_position_count = 0
+        # 0.6 passes default (0.5) but fails custom (0.70)
+        d = Decision(action="BUY", confidence=0.6, reasoning="sig", symbol="ETH")
+        result = await rm.validate_decision(d)
+        assert result.approved is False
+        assert "below minimum 0.7" in result.reason
 
     @pytest.mark.asyncio
     async def test_validate_duplicate_position_blocks(self, risk_env):

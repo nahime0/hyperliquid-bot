@@ -84,7 +84,7 @@ class Bot:
         self._market_data = MarketData(self._client, settings)
         self._advisor = AIAdvisor(config=settings.ai, db=self._db)
         self._positions = PositionTracker(self._db, settings.risk, market_data=self._market_data)
-        self._risk = RiskManager(settings.risk, self._client, self._db, self._positions, market_config=settings.market, market_data=self._market_data)
+        self._risk = RiskManager(settings.risk, self._client, self._db, self._positions, market_config=settings.market, market_data=self._market_data, ai_min_confidence=settings.ai.min_confidence)
 
         # Autonomous components
         self._trend_filter = TrendFilter(self._market_data)
@@ -1418,6 +1418,7 @@ class Bot:
         symbol = decision.symbol
         price = await self._client.get_price(symbol)
         leverage = decision.leverage or self._settings.hyperliquid.default_leverage
+        leverage = min(leverage, self._settings.risk.max_leverage)
 
         # Ensure leverage is set on Hyperliquid BEFORE placing the order
         try:

@@ -58,6 +58,7 @@ class RiskManager:
         position_tracker: Any = None,
         market_config: MarketConfig | None = None,
         market_data: Any = None,
+        ai_min_confidence: float = 0.5,
     ) -> None:
         self._config = config
         self._client = client
@@ -66,6 +67,7 @@ class RiskManager:
         self._position_tracker = position_tracker
         self._market_config = market_config
         self._market_data = market_data
+        self._ai_min_confidence = ai_min_confidence
 
         # Runtime state
         self._peak_balance: float = 0.0
@@ -242,8 +244,8 @@ class RiskManager:
             )
 
         # ── Minimum confidence ──
-        if decision.confidence < 0.5:
-            return await self._block(decision, f"Confidence {decision.confidence:.2f} too low")
+        if decision.confidence < self._ai_min_confidence:
+            return await self._block(decision, f"Confidence {decision.confidence:.2f} below minimum {self._ai_min_confidence}")
 
         # ── Step 1: Compute SL (before sizing) ──
         sl_distance_pct: float | None = None
