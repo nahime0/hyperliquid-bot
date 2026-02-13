@@ -124,10 +124,20 @@ class MarketData:
         """Subscribe to Hyperliquid WebSocket feeds."""
         api_url = self._settings.hyperliquid.api_url
 
-        # Create a separate Info instance with WS enabled
-        self._ws_info = await asyncio.to_thread(
-            lambda: __import__('hyperliquid.info', fromlist=['Info']).Info(api_url, skip_ws=False)
-        )
+        # Create a separate Info instance with WS enabled (retry on 429)
+        for attempt in range(5):
+            try:
+                self._ws_info = await asyncio.to_thread(
+                    lambda: __import__('hyperliquid.info', fromlist=['Info']).Info(api_url, skip_ws=False)
+                )
+                break
+            except Exception as e:
+                if attempt < 4 and "429" in str(e):
+                    wait = 2 ** attempt
+                    logger.warning("WS Info init rate-limited, retry in %ds (%d/5)", wait, attempt + 1)
+                    await asyncio.sleep(wait)
+                else:
+                    raise
 
         # WS allMids disabled — unreliable (phantom price spikes observed).
         # Mid prices are now refreshed via REST: refresh_mid_prices().
