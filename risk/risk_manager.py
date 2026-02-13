@@ -213,6 +213,10 @@ class RiskManager:
         if decision.action == "SCALE_UP":
             return await self._validate_scale_up(decision)
 
+        # ── FLIP: separate validation path ──
+        if decision.action == "FLIP":
+            return await self._validate_flip(decision)
+
         # ── Max open positions (dynamic or static) ──
         max_pos = self._effective_max_positions()
         if decision.action in ("BUY", "SHORT") and self._open_position_count >= max_pos:
@@ -445,6 +449,94 @@ class RiskManager:
             decision=decision,
             size=size,
             reason="approved_scale_up",
+        )
+
+    async def _validate_flip(self, decision: Decision) -> ValidationResult:
+        """Validate a FLIP decision: close losing position + open opposite direction."""
+        if not self._position_tracker:
+            return await self._block(decision, "No position tracker")
+
+        pos = await self._position_tracker.get_position_for_symbol(decision.symbol)
+        if not pos:
+            return await self._block(decision, f"FLIP: no open position for {decision.symbol}")
+
+        # Must be in loss (if in profit, use CLOSE instead)
+        mid = None
+        try:
+            mid = await self._client.get_price(decision.symbol)
+        except Exception:
+            pass
+        if mid and mid > 0:
+            entry = pos["entry_price"]
+            direction = pos.get("direction", "LONG")
+            if direction == "LONG":
+                pnl_pct = (mid - entry) / entry * 100
+            else:
+                pnl_pct = (entry - mid) / entry * 100
+        else:
+            return await self._block(decision, "FLIP: cannot determine current PnL")
+
+        if pnl_pct > 0:
+            return await self._block(decision, f"FLIP: position is in profit (PnL={pnl_pct:.2f}%) — use CLOSE instead")
+
+        # Daily pause check
+        if self._daily_paused:
+            return await self._block(decision, f"DAILY PAUSE: {self._daily_pause_reason}")
+
+        # Spread check for new entry
+        spread_block = await self._check_spread(decision)
+        if spread_block:
+            return spread_block
+
+        # Minimum balance
+        if self._current_balance < self._config.min_balance_usdc:
+            return await self._block(
+                decision,
+                f"Balance {self._current_balance:.2f} below minimum {self._config.min_balance_usdc}",
+            )
+
+        # Sizing for the new position (net count doesn't change: -1 +1)
+        trade_stats = await self._db.get_trade_stats()
+        utilization_boost = self._compute_utilization_boost()
+        size = self._sizer.compute(
+            bankroll=self._current_balance,
+            trade_stats=trade_stats,
+            ai_confidence=decision.confidence,
+            ai_size_pct=decision.size_pct,
+            utilization_boost=utilization_boost,
+        )
+
+        if size.size_usdc <= 0:
+            return await self._block(decision, f"FLIP sizer: {size.reason}")
+
+        decision.size_pct = size.size_pct
+
+        logger.info(
+            "Decision APPROVED: FLIP %s size=%.2f%% (%.2f USDC) conf=%.2f PnL=%.2f%%",
+            decision.symbol, size.size_pct, size.size_usdc, decision.confidence, pnl_pct,
+        )
+        if self._cycle_count > 0 and decision.symbol:
+            try:
+                await self._db.insert_event(
+                    cycle=self._cycle_count,
+                    symbol=decision.symbol,
+                    event_type="RISK_APPROVED",
+                    source="risk_manager",
+                    action="FLIP",
+                    confidence=decision.confidence,
+                    details={
+                        "size_pct": size.size_pct,
+                        "size_usdc": round(size.size_usdc, 2),
+                        "pnl_pct": round(pnl_pct, 2),
+                    },
+                )
+            except Exception:
+                logger.debug("Failed to log RISK_APPROVED event", exc_info=True)
+        return ValidationResult(
+            approved=True,
+            decision=decision,
+            size=size,
+            reason="approved_flip",
         )
 
     # ── Risk metrics (for AI snapshot) ───────────────────────

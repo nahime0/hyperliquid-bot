@@ -288,6 +288,51 @@ class TestValidation:
         assert result.approved is True  # no TP → gate skipped
 
     @pytest.mark.asyncio
+    async def test_validate_flip_in_loss_approved(self, risk_env):
+        """FLIP on a losing position is approved."""
+        rm, pt, _ = risk_env
+        await pt.open_position("ETH", 2100, 0.5, direction="LONG")  # entry 2100, mock price 2000 → loss
+        rm._open_position_count = 1
+        d = Decision(action="FLIP", confidence=0.9, reasoning="trend reversal", symbol="ETH",
+                     stop_loss=2050, take_profit=1900, size_pct=3.0)
+        result = await rm.validate_decision(d)
+        assert result.approved is True
+        assert result.size is not None
+
+    @pytest.mark.asyncio
+    async def test_validate_flip_in_profit_blocked(self, risk_env):
+        """FLIP on a profitable position is blocked (use CLOSE instead)."""
+        rm, pt, _ = risk_env
+        await pt.open_position("ETH", 1900, 0.5, direction="LONG")  # entry 1900, mock price 2000 → profit
+        rm._open_position_count = 1
+        d = Decision(action="FLIP", confidence=0.9, reasoning="reverse", symbol="ETH")
+        result = await rm.validate_decision(d)
+        assert result.approved is False
+        assert "in profit" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_validate_flip_no_position_blocked(self, risk_env):
+        """FLIP with no open position is blocked."""
+        rm, pt, _ = risk_env
+        d = Decision(action="FLIP", confidence=0.9, reasoning="reverse", symbol="ETH")
+        result = await rm.validate_decision(d)
+        assert result.approved is False
+        assert "no open position" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_validate_flip_daily_pause_blocked(self, risk_env):
+        """FLIP is blocked during daily pause."""
+        rm, pt, _ = risk_env
+        await pt.open_position("ETH", 2100, 0.5, direction="LONG")
+        rm._open_position_count = 1
+        rm._daily_paused = True
+        rm._daily_pause_reason = "daily dd"
+        d = Decision(action="FLIP", confidence=0.9, reasoning="reverse", symbol="ETH")
+        result = await rm.validate_decision(d)
+        assert result.approved is False
+        assert "DAILY PAUSE" in result.reason
+
+    @pytest.mark.asyncio
     async def test_holding_period_blocks_early_close(self, db):
         """Holding period blocks AI CLOSE if position too young."""
         rc = RiskConfig(min_holding_minutes=15)
@@ -717,16 +762,16 @@ class TestRiskBasedSizing:
     def test_risk_cap_reduces_size_for_wide_sl(self):
         """Wide SL (10%) with small risk budget → risk cap shrinks size."""
         from risk.position_sizer import PositionSizer
-        # 0.5% risk on 1000 = $5 budget. SL=10% → max_notional=$50 → 5% of bankroll
-        # Cold start would give 5% → risk cap = 5% → same
-        # But with utilization boost 2.5x: cold_start=12.5%, risk_cap=5% → caps to 5%
-        rc = RiskConfig(risk_per_trade_pct=0.5, max_trade_pct=15.0, max_size_boost=2.5)
+        # usdc_per_position=25 on 1000 → base=2.5%, boost 2.5x → 6.25%
+        # 0.5% risk on 1000 = $5 budget. SL=10% → risk_cap=5% → caps 6.25% to 5%
+        rc = RiskConfig(risk_per_trade_pct=0.5, max_trade_pct=15.0, max_size_boost=2.5,
+                        usdc_per_position=25.0)
         sizer = PositionSizer(rc)
         stats = {"total_trades": 0}
 
-        # With boost, cold start = 5% * 2.5 = 12.5%
+        # With boost, cold start = 2.5% * 2.5 = 6.25%
         uncapped = sizer.compute(1000, stats, 0.75, utilization_boost=2.5, sl_distance_pct=None)
-        assert uncapped.size_pct == pytest.approx(12.5, abs=0.1)
+        assert uncapped.size_pct == pytest.approx(6.25, abs=0.1)
 
         # With 10% SL: risk_cap = (1000*0.005) / 0.10 / 1000 * 100 = 5%
         capped = sizer.compute(1000, stats, 0.75, utilization_boost=2.5, sl_distance_pct=10.0)
@@ -770,6 +815,133 @@ class TestRiskBasedSizing:
         narrow = sizer.compute(1000, stats, 0.8, sl_distance_pct=1.0)
         # Wide SL gets smaller or equal size due to risk cap
         assert wide.size_usdc <= narrow.size_usdc
+
+
+# ── Kelly floor: usdc_per_position ────────────────────────────
+
+
+class TestKellyFloor:
+    """Kelly mode must use max(MIN_ORDER_USDC, usdc_per_position) as floor."""
+
+    def test_kelly_floor_uses_usdc_per_position(self):
+        """With usdc_per_position=40, Kelly floor should be $40, not $10."""
+        from risk.position_sizer import PositionSizer, MIN_ORDER_USDC
+        rc = RiskConfig(usdc_per_position=40.0, max_trade_pct=15.0)
+        sizer = PositionSizer(rc)
+        # Stats that produce tiny Kelly size
+        stats = {
+            "total_trades": 50,
+            "win_rate": 0.5,
+            "avg_win": 5.0,
+            "avg_loss": 5.0,
+        }
+        result = sizer.compute(1000, stats, 0.7)
+        # Kelly with 50/50 win/loss and payoff=1 gives f=0 → floor kicks in
+        # Floor should be 40 USDC (usdc_per_position), not 10 (MIN_ORDER_USDC)
+        assert result.size_usdc == pytest.approx(40.0, abs=0.01)
+
+    def test_kelly_floor_default_25(self):
+        """Default usdc_per_position=25 → floor at $25."""
+        from risk.position_sizer import PositionSizer
+        rc = RiskConfig(max_trade_pct=15.0)  # default usdc_per_position=25
+        sizer = PositionSizer(rc)
+        stats = {
+            "total_trades": 50,
+            "win_rate": 0.5,
+            "avg_win": 5.0,
+            "avg_loss": 5.0,
+        }
+        result = sizer.compute(1000, stats, 0.7)
+        assert result.size_usdc == pytest.approx(25.0, abs=0.01)
+
+    def test_kelly_floor_min_order_usdc_when_per_position_low(self):
+        """If usdc_per_position < MIN_ORDER_USDC, floor is MIN_ORDER_USDC."""
+        from risk.position_sizer import PositionSizer, MIN_ORDER_USDC
+        rc = RiskConfig(usdc_per_position=5.0, max_trade_pct=15.0)
+        sizer = PositionSizer(rc)
+        stats = {
+            "total_trades": 50,
+            "win_rate": 0.5,
+            "avg_win": 5.0,
+            "avg_loss": 5.0,
+        }
+        result = sizer.compute(1000, stats, 0.7)
+        assert result.size_usdc == pytest.approx(MIN_ORDER_USDC, abs=0.01)
+
+    def test_kelly_large_enough_skips_floor(self):
+        """When Kelly produces size > usdc_per_position, no floor applied."""
+        from risk.position_sizer import PositionSizer
+        rc = RiskConfig(usdc_per_position=25.0, max_trade_pct=15.0)
+        sizer = PositionSizer(rc)
+        # Great stats → Kelly gives big size
+        stats = {
+            "total_trades": 50,
+            "win_rate": 0.7,
+            "avg_win": 30.0,
+            "avg_loss": 10.0,
+        }
+        result = sizer.compute(1000, stats, 0.9)
+        # Kelly should produce well above $25
+        assert result.size_usdc > 25.0
+
+    def test_kelly_floor_falls_back_to_max_pct(self):
+        """Floor > max_trade_pct → falls back to max allowed (not rejected)."""
+        from risk.position_sizer import PositionSizer
+        rc = RiskConfig(usdc_per_position=40.0, max_trade_pct=2.0)
+        sizer = PositionSizer(rc)
+        stats = {
+            "total_trades": 50,
+            "win_rate": 0.5,
+            "avg_win": 5.0,
+            "avg_loss": 5.0,
+        }
+        # Bankroll=1000, max_pct=2% → max $20. Floor=$40 > $20 → use $20
+        result = sizer.compute(1000, stats, 0.7)
+        assert result.size_usdc == pytest.approx(20.0, abs=0.01)
+        assert result.capped is True
+
+    def test_kelly_floor_rejected_only_below_exchange_min(self):
+        """Only rejected if even max_trade_pct < MIN_ORDER_USDC ($10)."""
+        from risk.position_sizer import PositionSizer, MIN_ORDER_USDC
+        rc = RiskConfig(usdc_per_position=40.0, max_trade_pct=1.0)
+        sizer = PositionSizer(rc)
+        stats = {
+            "total_trades": 50,
+            "win_rate": 0.5,
+            "avg_win": 5.0,
+            "avg_loss": 5.0,
+        }
+        # Bankroll=500, max_pct=1% → $5 < MIN_ORDER_USDC → reject
+        result = sizer.compute(500, stats, 0.7)
+        assert result.size_usdc == 0
+        assert "exchange minimum" in result.reason
+
+    def test_cold_start_reject_below_exchange_min(self):
+        """Cold-start rejects only when below exchange minimum ($10)."""
+        from risk.position_sizer import PositionSizer
+        rc = RiskConfig(usdc_per_position=40.0, max_trade_pct=1.0)
+        sizer = PositionSizer(rc)
+        stats = {"total_trades": 0}
+        # Bankroll=100, max_pct=1% → $1 < MIN_ORDER_USDC → rejected
+        result = sizer.compute(100, stats, 0.7)
+        assert result.size_usdc == 0
+        assert "exchange minimum" in result.reason
+
+    def test_small_bankroll_realistic(self):
+        """120 USDC, usdc_per_position=25, max_trade_pct=15% → $18 trades."""
+        from risk.position_sizer import PositionSizer
+        rc = RiskConfig(usdc_per_position=25.0, max_trade_pct=15.0)
+        sizer = PositionSizer(rc)
+        stats = {
+            "total_trades": 50,
+            "win_rate": 0.5,
+            "avg_win": 5.0,
+            "avg_loss": 5.0,
+        }
+        result = sizer.compute(120, stats, 0.7)
+        # Floor=$25 > 15% of 120=$18 → falls back to $18
+        assert result.size_usdc == pytest.approx(18.0, abs=0.01)
+        assert result.capped is True
 
 
 # ── Partial take profit ──────────────────────────────────────

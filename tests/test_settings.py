@@ -41,7 +41,7 @@ class TestRiskConfig:
         assert c.usdc_per_position == 25.0
         assert c.target_utilization == 0.50
         assert c.max_size_boost == 2.5
-        assert c.trailing_breakeven_pct == 1.0
+        assert c.trailing_breakeven_pct == 0.5
         assert c.trailing_start_pct == 1.5
         assert c.trailing_distance_pct == 1.0
         assert c.trailing_tight_pct == 2.5
@@ -55,9 +55,9 @@ class TestRiskConfig:
         # Risk-based sizing
         assert c.risk_per_trade_pct == 1.0
         # Partial TP
-        assert c.partial_tp_enabled is True
+        assert c.partial_tp_enabled is False
         assert c.partial_tp_pct == 50.0
-        assert c.partial_tp_trigger_pct == 1.0
+        assert c.partial_tp_trigger_pct == 2.0
         # R:R gate
         assert c.min_rr_ratio == 1.5
         # ATR trailing
@@ -65,7 +65,7 @@ class TestRiskConfig:
         assert c.atr_trailing_multiplier == 1.5
         assert c.atr_trailing_tight_multiplier == 1.0
         assert c.atr_trailing_min_pct == 0.5
-        assert c.atr_trailing_max_pct == 3.0
+        assert c.atr_trailing_max_pct == 2.0
 
     def test_frozen(self):
         c = RiskConfig()
@@ -115,3 +115,15 @@ class TestSettings:
         assert isinstance(s.ai.model, str) and len(s.ai.model) > 0  # from env or default
         assert s.market.max_spread_pct == 0.5
         assert s.strategy.min_candle_volume_usdc == 10_000.0
+
+    def test_active_strategies_default_13(self):
+        """Default active_strategies includes all 13 strategies."""
+        s = Settings()
+        expected = {
+            "mean_reversion", "rsi_divergence", "trend_following",
+            "bb_squeeze", "breakout", "btc_correlation", "buy_the_dip",
+            "ema_crossover", "funding_rate", "macd_divergence",
+            "mtf_confluence", "session_momentum", "volume_spike",
+        }
+        assert set(s.strategy.active_strategies) == expected
+        assert len(s.strategy.active_strategies) == 13

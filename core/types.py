@@ -8,7 +8,7 @@ from dataclasses import dataclass
 class Decision:
     """Represents a trading decision from a strategy or AI advisor."""
 
-    action: str  # BUY, SHORT, SELL, HOLD, CLOSE, SCALE_UP
+    action: str  # BUY, SHORT, SELL, HOLD, CLOSE, SCALE_UP, FLIP
     confidence: float  # 0-1
     reasoning: str
     symbol: str | None = None

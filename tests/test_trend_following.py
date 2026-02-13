@@ -394,7 +394,7 @@ class TestMultiStrategyConflictResolution:
             ),
         ]
         ms = MultiStrategy([])
-        result = ms._merge(decisions)
+        result = MultiStrategy.merge(decisions)
         assert len(result) == 1
         assert result[0].action == "SHORT"
         assert result[0].confidence == 0.85
@@ -415,7 +415,7 @@ class TestMultiStrategyConflictResolution:
             ),
         ]
         ms = MultiStrategy([])
-        result = ms._merge(decisions)
+        result = MultiStrategy.merge(decisions)
         assert len(result) == 1
         assert result[0].action == "BUY"
         assert result[0].confidence == 0.80
@@ -436,7 +436,7 @@ class TestMultiStrategyConflictResolution:
             ),
         ]
         ms = MultiStrategy([])
-        result = ms._merge(decisions)
+        result = MultiStrategy.merge(decisions)
         assert len(result) == 1
         assert result[0].action == "SHORT"
         assert result[0].confidence == 0.95  # 0.85 + 0.10 boost
@@ -451,7 +451,7 @@ class TestMultiStrategyConflictResolution:
             ),
         ]
         ms = MultiStrategy([])
-        result = ms._merge(decisions)
+        result = MultiStrategy.merge(decisions)
         assert len(result) == 1
         assert result[0].confidence == 0.75
 
@@ -468,6 +468,6 @@ class TestMultiStrategyConflictResolution:
             ),
         ]
         ms = MultiStrategy([])
-        result = ms._merge(decisions)
+        result = MultiStrategy.merge(decisions)
         assert len(result) == 1
         assert result[0].strategy_type == "trend_following"

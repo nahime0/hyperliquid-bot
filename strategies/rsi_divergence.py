@@ -363,7 +363,6 @@ class RSIDivergenceStrategy(Strategy):
             confidence=sig.confidence,
             reasoning=f"[RSIDiv LONG] {symbol}: {sig.reason}, trend={sig.trend}",
             strategy_type="rsi_divergence",
-            size_pct=10.0,
             order_type="MARKET",
         )
 
@@ -389,7 +388,6 @@ class RSIDivergenceStrategy(Strategy):
             confidence=sig.confidence,
             reasoning=f"[RSIDiv SHORT] {symbol}: {sig.reason}, trend={sig.trend}",
             strategy_type="rsi_divergence",
-            size_pct=10.0,
             order_type="MARKET",
         )
 

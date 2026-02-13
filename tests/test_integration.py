@@ -125,10 +125,12 @@ class TestAdvisorIntegration:
         # Not ready yet
         advisor.set_cycle(2)
         ready = await advisor.check_deferred({"SOL": 150.0})
-        assert "SOL" not in ready
+        ready_syms = {k[0] for k in ready}
+        assert "SOL" not in ready_syms
 
         # Ready now
         advisor.set_cycle(4)
         ready = await advisor.check_deferred({"SOL": 150.0})
-        assert "SOL" in ready
+        ready_syms = {k[0] for k in ready}
+        assert "SOL" in ready_syms
         assert "SOL" not in advisor.deferred_symbols

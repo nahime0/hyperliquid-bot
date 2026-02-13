@@ -469,7 +469,6 @@ class MeanReversionStrategy(Strategy):
                 f"vol={vol_str}, RSI_1h={rsi_1h_str}, trend={sig.trend}"
             ),
             strategy_type="mean_reversion",
-            size_pct=10.0,
             order_type="MARKET",
         )
 
@@ -559,7 +558,6 @@ class MeanReversionStrategy(Strategy):
                 f"vol={vol_str}, RSI_1h={rsi_1h_str}, trend={sig.trend}"
             ),
             strategy_type="mean_reversion",
-            size_pct=10.0,
             order_type="MARKET",
         )
 

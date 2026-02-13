@@ -348,7 +348,6 @@ class TrendFollowingStrategy(Strategy):
                 f"trend_4h={sig.trend_4h}, vol={vol_str}"
             ),
             strategy_type="trend_following",
-            size_pct=10.0,
             order_type="MARKET",
         )
 
@@ -418,7 +417,6 @@ class TrendFollowingStrategy(Strategy):
                 f"trend_4h={sig.trend_4h}, vol={vol_str}"
             ),
             strategy_type="trend_following",
-            size_pct=10.0,
             order_type="MARKET",
         )
 

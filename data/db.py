@@ -147,8 +147,10 @@ CREATE TABLE IF NOT EXISTS deferred_opportunities (
     deferred_at_cycle INTEGER NOT NULL,
     conditions TEXT NOT NULL DEFAULT '{}',
     type TEXT NOT NULL DEFAULT 'opportunity',
+    strategy_type TEXT NOT NULL DEFAULT 'unknown',
+    confidence REAL NOT NULL DEFAULT 0.0,
     created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-    UNIQUE(symbol, type)
+    UNIQUE(symbol, strategy_type, type)
 );
 
 CREATE TABLE IF NOT EXISTS bot_state (
@@ -173,7 +175,32 @@ _MIGRATIONS = [
     "ALTER TABLE trades ADD COLUMN direction TEXT DEFAULT 'LONG'",
     "ALTER TABLE positions ADD COLUMN partial_closed INTEGER DEFAULT 0",
     "ALTER TABLE positions ADD COLUMN ask_close INTEGER DEFAULT 0",
+    "ALTER TABLE deferred_opportunities ADD COLUMN strategy_type TEXT NOT NULL DEFAULT 'unknown'",
+    "ALTER TABLE deferred_opportunities ADD COLUMN confidence REAL NOT NULL DEFAULT 0.0",
 ]
+
+# Multi-statement migration: rebuild deferred_opportunities with correct UNIQUE constraint
+# (old table had UNIQUE(symbol, type), need UNIQUE(symbol, strategy_type, type))
+_DEFERRED_REBUILD = """
+CREATE TABLE IF NOT EXISTS deferred_opportunities_new (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol TEXT NOT NULL,
+    original_action TEXT NOT NULL,
+    deferred_at_cycle INTEGER NOT NULL,
+    conditions TEXT NOT NULL DEFAULT '{}',
+    type TEXT NOT NULL DEFAULT 'opportunity',
+    strategy_type TEXT NOT NULL DEFAULT 'unknown',
+    confidence REAL NOT NULL DEFAULT 0.0,
+    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    UNIQUE(symbol, strategy_type, type)
+);
+INSERT OR IGNORE INTO deferred_opportunities_new
+    (symbol, original_action, deferred_at_cycle, conditions, type, strategy_type, confidence, created_at)
+    SELECT symbol, original_action, deferred_at_cycle, conditions, type, strategy_type, confidence, created_at
+    FROM deferred_opportunities;
+DROP TABLE deferred_opportunities;
+ALTER TABLE deferred_opportunities_new RENAME TO deferred_opportunities;
+"""
 
 
 class Database:
@@ -197,6 +224,18 @@ class Database:
                 await self._db.commit()
             except Exception:
                 pass  # Column already exists
+        # Rebuild deferred_opportunities if UNIQUE constraint is stale (missing strategy_type)
+        try:
+            rows = await self._db.execute_fetchall(
+                "SELECT sql FROM sqlite_master WHERE name='deferred_opportunities' AND type='table'"
+            )
+            if rows:
+                ddl = rows[0][0] or ""
+                if "UNIQUE" in ddl and "strategy_type" not in ddl.split("UNIQUE")[1]:
+                    await self._db.executescript(_DEFERRED_REBUILD)
+                    logger.info("Rebuilt deferred_opportunities with UNIQUE(symbol, strategy_type, type)")
+        except Exception:
+            pass  # Fresh DB or already correct
         logger.info("Database connected: %s", self._db_path)
 
     async def close(self) -> None:
@@ -468,24 +507,33 @@ class Database:
         cycle: int,
         conditions: dict[str, Any] | None = None,
         type_: str = "opportunity",
+        strategy_type: str = "unknown",
+        confidence: float = 0.0,
     ) -> None:
         await self.db.execute(
-            """INSERT INTO deferred_opportunities (symbol, original_action, deferred_at_cycle, conditions, type)
-               VALUES (?, ?, ?, ?, ?)
-               ON CONFLICT(symbol, type) DO UPDATE SET
+            """INSERT INTO deferred_opportunities (symbol, original_action, deferred_at_cycle, conditions, type, strategy_type, confidence)
+               VALUES (?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(symbol, strategy_type, type) DO UPDATE SET
                    original_action = excluded.original_action,
                    deferred_at_cycle = excluded.deferred_at_cycle,
                    conditions = excluded.conditions,
+                   confidence = excluded.confidence,
                    created_at = strftime('%Y-%m-%dT%H:%M:%SZ','now')""",
-            (symbol, action, cycle, json.dumps(conditions or {}), type_),
+            (symbol, action, cycle, json.dumps(conditions or {}), type_, strategy_type, confidence),
         )
         await self.db.commit()
 
-    async def delete_deferred(self, symbol: str, type_: str = "opportunity") -> None:
-        await self.db.execute(
-            "DELETE FROM deferred_opportunities WHERE symbol = ? AND type = ?",
-            (symbol, type_),
-        )
+    async def delete_deferred(self, symbol: str, type_: str = "opportunity", strategy_type: str | None = None) -> None:
+        if strategy_type is not None:
+            await self.db.execute(
+                "DELETE FROM deferred_opportunities WHERE symbol = ? AND type = ? AND strategy_type = ?",
+                (symbol, type_, strategy_type),
+            )
+        else:
+            await self.db.execute(
+                "DELETE FROM deferred_opportunities WHERE symbol = ? AND type = ?",
+                (symbol, type_),
+            )
         await self.db.commit()
 
     async def get_all_deferred(self, type_: str | None = None) -> list[dict[str, Any]]:

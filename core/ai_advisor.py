@@ -38,6 +38,8 @@ class DeferredOpportunity:
     deferred_at_cycle: int
     conditions: dict[str, Any] = field(default_factory=dict)
     # conditions may include: wait_cycles, wait_until_price_above, wait_until_price_below
+    strategy_type: str = "unknown"
+    confidence: float = 0.0
 
 
 class AIAdvisor:
@@ -67,25 +69,45 @@ class AIAdvisor:
         # Build clean env for subprocess
         self._env = os.environ.copy()
 
-        # Deferred opportunities (in-memory, synced to DB when available)
-        self._deferred: dict[str, DeferredOpportunity] = {}
-        # Deferred position holds (same structure, separate tracking)
+        # Deferred opportunities keyed by (symbol, strategy_type)
+        self._deferred: dict[tuple[str, str], DeferredOpportunity] = {}
+        # Deferred position holds keyed by symbol (positions don't have strategy_type)
         self._deferred_holds: dict[str, DeferredOpportunity] = {}
 
     @property
-    def deferred_symbols(self) -> set[str]:
-        """Symbols with deferred opportunities."""
+    def deferred_keys(self) -> set[tuple[str, str]]:
+        """Keys (symbol, strategy_type) with deferred opportunities."""
         return set(self._deferred.keys())
+
+    @property
+    def deferred_symbols(self) -> set[str]:
+        """Symbols with deferred opportunities (for quick checks)."""
+        return {k[0] for k in self._deferred.keys()}
 
     @property
     def deferred_hold_symbols(self) -> set[str]:
         """Symbols with deferred position holds."""
         return set(self._deferred_holds.keys())
 
-    def get_deferred_action(self, symbol: str) -> str | None:
+    def is_deferred(self, symbol: str, strategy_type: str) -> bool:
+        """Check if a specific (symbol, strategy_type) pair is deferred."""
+        return (symbol, strategy_type) in self._deferred
+
+    def get_deferred_action(self, symbol: str, strategy_type: str | None = None) -> str | None:
         """Get the original action (BUY/SHORT) of a deferred opportunity."""
-        opp = self._deferred.get(symbol)
-        return opp.original_action if opp else None
+        if strategy_type is not None:
+            opp = self._deferred.get((symbol, strategy_type))
+            return opp.original_action if opp else None
+        # Fallback: find any deferred for this symbol
+        for (sym, _st), opp in self._deferred.items():
+            if sym == symbol:
+                return opp.original_action
+        return None
+
+    def get_deferred_confidence(self, symbol: str, strategy_type: str) -> float:
+        """Get the confidence score stored when this opportunity was deferred."""
+        opp = self._deferred.get((symbol, strategy_type))
+        return opp.confidence if opp else 0.0
 
     def set_cycle(self, cycle: int) -> None:
         """Update the current cycle count (called from main loop)."""
@@ -93,41 +115,64 @@ class AIAdvisor:
 
     # ── Deferred opportunity management ───────────────────────
 
-    async def defer(self, symbol: str, original_action: str, conditions: dict[str, Any]) -> None:
+    async def defer(
+        self, symbol: str, original_action: str, conditions: dict[str, Any],
+        strategy_type: str = "unknown", confidence: float = 0.0,
+    ) -> None:
         """Defer an opportunity for later re-evaluation."""
-        self._deferred[symbol] = DeferredOpportunity(
+        key = (symbol, strategy_type)
+        self._deferred[key] = DeferredOpportunity(
             symbol=symbol,
             original_action=original_action,
             deferred_at_cycle=self._cycle_count,
             conditions=conditions,
+            strategy_type=strategy_type,
+            confidence=confidence,
         )
         if self._db:
             try:
-                await self._db.upsert_deferred(symbol, original_action, self._cycle_count, conditions, "opportunity")
+                await self._db.upsert_deferred(
+                    symbol, original_action, self._cycle_count, conditions,
+                    "opportunity", strategy_type, confidence,
+                )
             except Exception:
-                logger.debug("Failed to persist deferred opportunity for %s", symbol, exc_info=True)
+                logger.debug("Failed to persist deferred opportunity for %s/%s", symbol, strategy_type, exc_info=True)
         logger.info(
-            "Deferred %s %s — conditions: %s",
-            original_action, symbol, conditions,
+            "Deferred %s %s [%s] score=%.2f — conditions: %s",
+            original_action, symbol, strategy_type, confidence, conditions,
         )
 
-    async def remove_deferred(self, symbol: str) -> None:
-        """Remove a deferred opportunity (signal gone or conditions met)."""
-        if symbol in self._deferred:
-            del self._deferred[symbol]
+    async def remove_deferred(self, symbol: str, strategy_type: str | None = None) -> None:
+        """Remove deferred opportunity(ies). If strategy_type is None, remove all for symbol."""
+        if strategy_type is not None:
+            key = (symbol, strategy_type)
+            if key in self._deferred:
+                del self._deferred[key]
+                if self._db:
+                    try:
+                        await self._db.delete_deferred(symbol, "opportunity", strategy_type)
+                    except Exception:
+                        logger.debug("Failed to delete deferred opportunity for %s/%s", symbol, strategy_type, exc_info=True)
+                logger.debug("Removed deferred opportunity for %s/%s", symbol, strategy_type)
+        else:
+            # Remove all deferred for this symbol
+            to_remove = [k for k in self._deferred if k[0] == symbol]
+            for k in to_remove:
+                del self._deferred[k]
             if self._db:
                 try:
                     await self._db.delete_deferred(symbol, "opportunity")
                 except Exception:
-                    logger.debug("Failed to delete deferred opportunity for %s", symbol, exc_info=True)
-            logger.debug("Removed deferred opportunity for %s", symbol)
+                    logger.debug("Failed to delete deferred opportunities for %s", symbol, exc_info=True)
+            if to_remove:
+                logger.debug("Removed %d deferred opportunity(ies) for %s", len(to_remove), symbol)
 
-    async def check_deferred(self, mid_prices: dict[str, float]) -> list[str]:
+    async def check_deferred(self, mid_prices: dict[str, float]) -> list[tuple[str, str]]:
         """Check which deferred opportunities have met their conditions.
 
-        Returns list of symbols ready for re-evaluation.
+        Returns list of (symbol, strategy_type) tuples ready for re-evaluation.
         """
-        return await self._check_conditions(self._deferred, mid_prices, "opportunity")
+        return await self._check_deferred_conditions(mid_prices)
 
     # ── Deferred position hold management ─────────────────────
 
@@ -161,7 +206,7 @@ class AIAdvisor:
 
         Returns list of symbols ready for AI re-evaluation.
         """
-        return await self._check_conditions(self._deferred_holds, mid_prices, "hold")
+        return await self._check_hold_conditions(mid_prices)
 
     # ── Load from DB (startup) ──────────────────────────────
 
@@ -174,25 +219,63 @@ class AIAdvisor:
             count = len(rows)
             if count:
                 for row in rows:
-                    await self._db.delete_deferred(row["symbol"], row["type"])
+                    await self._db.delete_deferred(row["symbol"], row["type"], row.get("strategy_type"))
                 logger.info("Cleared %d stale deferred entries on startup", count)
         except Exception:
             logger.warning("Failed to clear deferred from DB", exc_info=True)
         self._deferred.clear()
         self._deferred_holds.clear()
 
-    # ── Shared condition checker ────────────────────────────
+    # ── Condition checkers ────────────────────────────────
 
-    async def _check_conditions(
-        self,
-        store: dict[str, DeferredOpportunity],
-        mid_prices: dict[str, float],
-        label: str,
-    ) -> list[str]:
+    async def _check_deferred_conditions(self, mid_prices: dict[str, float]) -> list[tuple[str, str]]:
+        """Check deferred opportunities keyed by (symbol, strategy_type)."""
+        ready: list[tuple[str, str]] = []
+        to_remove: list[tuple[str, str]] = []
+
+        for key, opp in self._deferred.items():
+            symbol = opp.symbol
+            cond = opp.conditions
+            met = False
+
+            wait_cycles = cond.get("wait_cycles")
+            if wait_cycles is not None:
+                if self._cycle_count - opp.deferred_at_cycle >= wait_cycles:
+                    met = True
+
+            price = mid_prices.get(symbol)
+            if price is not None:
+                above = cond.get("wait_until_price_above")
+                if above is not None and price >= above:
+                    met = True
+                below = cond.get("wait_until_price_below")
+                if below is not None and price <= below:
+                    met = True
+
+            if not cond:
+                met = True
+
+            if met:
+                ready.append(key)
+                to_remove.append(key)
+
+        for key in to_remove:
+            opp = self._deferred.pop(key)
+            if self._db:
+                try:
+                    await self._db.delete_deferred(key[0], "opportunity", key[1])
+                except Exception:
+                    logger.debug("Failed to delete deferred opportunity %s from DB", key, exc_info=True)
+            logger.info("Deferred opportunity %s/%s conditions met — re-evaluating", key[0], key[1])
+
+        return ready
+
+    async def _check_hold_conditions(self, mid_prices: dict[str, float]) -> list[str]:
+        """Check deferred holds keyed by symbol."""
         ready: list[str] = []
         to_remove: list[str] = []
 
-        for symbol, opp in store.items():
+        for symbol, opp in self._deferred_holds.items():
             cond = opp.conditions
             met = False
 
@@ -218,13 +301,13 @@ class AIAdvisor:
                 to_remove.append(symbol)
 
         for symbol in to_remove:
-            del store[symbol]
+            del self._deferred_holds[symbol]
             if self._db:
                 try:
-                    await self._db.delete_deferred(symbol, label)
+                    await self._db.delete_deferred(symbol, "hold")
                 except Exception:
-                    logger.debug("Failed to delete deferred %s %s from DB", label, symbol, exc_info=True)
-            logger.info("Deferred %s %s conditions met — re-evaluating", label, symbol)
+                    logger.debug("Failed to delete deferred hold %s from DB", symbol, exc_info=True)
+            logger.info("Deferred hold %s conditions met — re-evaluating", symbol)
 
         return ready
 
@@ -233,12 +316,13 @@ class AIAdvisor:
     def get_deferred_summary(self) -> list[dict[str, Any]]:
         """Build a structured summary of all deferred items for the AI payload."""
         items: list[dict[str, Any]] = []
-        for sym, opp in self._deferred.items():
+        for (sym, strat), opp in self._deferred.items():
             age = self._cycle_count - opp.deferred_at_cycle
             item: dict[str, Any] = {
                 "symbol": sym,
                 "action": opp.original_action,
                 "type": "opportunity",
+                "strategy_type": strat,
                 "deferred_cycles_ago": age,
             }
             if opp.conditions.get("wait_cycles") is not None:
@@ -357,7 +441,7 @@ class AIAdvisor:
         return result
 
 
-_VALID_POSITION_ACTIONS = {"HOLD", "CLOSE", "ADJUST", "SCALE_UP"}
+_VALID_POSITION_ACTIONS = {"HOLD", "CLOSE", "ADJUST", "SCALE_UP", "FLIP"}
 _VALID_OPPORTUNITY_ACTIONS = {"BUY", "SHORT", "HOLD"}
 
 

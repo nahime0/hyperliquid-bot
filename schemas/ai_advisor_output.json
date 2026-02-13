@@ -7,7 +7,7 @@
         "type": "object",
         "properties": {
           "symbol": { "type": "string" },
-          "action": { "enum": ["HOLD", "CLOSE", "ADJUST", "SCALE_UP"] },
+          "action": { "enum": ["HOLD", "CLOSE", "ADJUST", "SCALE_UP", "FLIP"] },
           "adjustments": {
             "type": "object",
             "properties": {

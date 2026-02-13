@@ -21,39 +21,75 @@ class TestDeferredTracking:
     @pytest.mark.asyncio
     async def test_defer_adds_symbol(self):
         advisor = AIAdvisor(model="haiku")
-        await advisor.defer("BTC", "SHORT", {"wait_cycles": 3})
+        await advisor.defer("BTC", "SHORT", {"wait_cycles": 3}, "mean_reversion")
         assert "BTC" in advisor.deferred_symbols
+        assert ("BTC", "mean_reversion") in advisor.deferred_keys
 
     @pytest.mark.asyncio
-    async def test_defer_replaces_existing(self):
+    async def test_defer_replaces_existing_same_strategy(self):
         advisor = AIAdvisor(model="haiku")
-        await advisor.defer("BTC", "SHORT", {"wait_cycles": 3})
-        await advisor.defer("BTC", "LONG", {"wait_cycles": 5})
+        await advisor.defer("BTC", "SHORT", {"wait_cycles": 3}, "mr")
+        await advisor.defer("BTC", "LONG", {"wait_cycles": 5}, "mr")
         assert "BTC" in advisor.deferred_symbols
         # Latest conditions win — check via check_deferred behavior
         advisor.set_cycle(4)
         ready = await advisor.check_deferred({})
-        assert "BTC" not in ready  # 4 - 0 = 4 < 5
+        ready_syms = {k[0] for k in ready}
+        assert "BTC" not in ready_syms  # 4 - 0 = 4 < 5
 
     @pytest.mark.asyncio
-    async def test_remove_deferred(self):
+    async def test_defer_different_strategies_coexist(self):
         advisor = AIAdvisor(model="haiku")
-        await advisor.defer("BTC", "SHORT", {"wait_cycles": 3})
+        await advisor.defer("BTC", "SHORT", {"wait_cycles": 3}, "mr")
+        await advisor.defer("BTC", "LONG", {"wait_cycles": 5}, "tf")
+        assert len(advisor.deferred_keys) == 2
+        assert advisor.is_deferred("BTC", "mr")
+        assert advisor.is_deferred("BTC", "tf")
+
+    @pytest.mark.asyncio
+    async def test_remove_deferred_specific_strategy(self):
+        advisor = AIAdvisor(model="haiku")
+        await advisor.defer("BTC", "SHORT", {"wait_cycles": 3}, "mr")
+        await advisor.defer("BTC", "LONG", {"wait_cycles": 5}, "tf")
+        await advisor.remove_deferred("BTC", "mr")
+        assert not advisor.is_deferred("BTC", "mr")
+        assert advisor.is_deferred("BTC", "tf")
+
+    @pytest.mark.asyncio
+    async def test_remove_deferred_all_for_symbol(self):
+        advisor = AIAdvisor(model="haiku")
+        await advisor.defer("BTC", "SHORT", {}, "mr")
+        await advisor.defer("BTC", "LONG", {}, "tf")
         await advisor.remove_deferred("BTC")
         assert "BTC" not in advisor.deferred_symbols
 
     @pytest.mark.asyncio
     async def test_remove_nonexistent_no_error(self):
         advisor = AIAdvisor(model="haiku")
-        await advisor.remove_deferred("XYZ")  # should not raise
+        await advisor.remove_deferred("XYZ", "mr")  # should not raise
 
     @pytest.mark.asyncio
     async def test_deferred_symbols_property(self):
         advisor = AIAdvisor(model="haiku")
-        await advisor.defer("BTC", "SHORT", {})
-        await advisor.defer("ETH", "LONG", {})
-        await advisor.defer("SOL", "LONG", {})
+        await advisor.defer("BTC", "SHORT", {}, "mr")
+        await advisor.defer("ETH", "LONG", {}, "mr")
+        await advisor.defer("SOL", "LONG", {}, "tf")
         assert advisor.deferred_symbols == {"BTC", "ETH", "SOL"}
+
+    @pytest.mark.asyncio
+    async def test_is_deferred(self):
+        advisor = AIAdvisor(model="haiku")
+        await advisor.defer("BTC", "SHORT", {}, "mr")
+        assert advisor.is_deferred("BTC", "mr")
+        assert not advisor.is_deferred("BTC", "tf")
+        assert not advisor.is_deferred("ETH", "mr")
+
+    @pytest.mark.asyncio
+    async def test_get_deferred_action_with_strategy(self):
+        advisor = AIAdvisor(model="haiku")
+        await advisor.defer("BTC", "SHORT", {}, "mr")
+        assert advisor.get_deferred_action("BTC", "mr") == "SHORT"
+        assert advisor.get_deferred_action("BTC", "tf") is None
 
     @pytest.mark.asyncio
     async def test_check_deferred_wait_cycles_not_ready(self):
@@ -62,7 +98,8 @@ class TestDeferredTracking:
         await advisor.defer("BTC", "SHORT", {"wait_cycles": 3})
         advisor.set_cycle(2)
         ready = await advisor.check_deferred({})
-        assert "BTC" not in ready
+        ready_syms = {k[0] for k in ready}
+        assert "BTC" not in ready_syms
         assert "BTC" in advisor.deferred_symbols
 
     @pytest.mark.asyncio
@@ -72,7 +109,8 @@ class TestDeferredTracking:
         await advisor.defer("BTC", "SHORT", {"wait_cycles": 3})
         advisor.set_cycle(5)
         ready = await advisor.check_deferred({})
-        assert "BTC" in ready
+        ready_syms = {k[0] for k in ready}
+        assert "BTC" in ready_syms
         assert "BTC" not in advisor.deferred_symbols  # removed after ready
 
     @pytest.mark.asyncio
@@ -80,28 +118,32 @@ class TestDeferredTracking:
         advisor = AIAdvisor(model="haiku")
         await advisor.defer("BTC", "LONG", {"wait_until_price_above": 45000})
         ready = await advisor.check_deferred({"BTC": 44000})
-        assert "BTC" not in ready
+        ready_syms = {k[0] for k in ready}
+        assert "BTC" not in ready_syms
 
     @pytest.mark.asyncio
     async def test_check_deferred_price_above_ready(self):
         advisor = AIAdvisor(model="haiku")
         await advisor.defer("BTC", "LONG", {"wait_until_price_above": 45000})
         ready = await advisor.check_deferred({"BTC": 46000})
-        assert "BTC" in ready
+        ready_syms = {k[0] for k in ready}
+        assert "BTC" in ready_syms
 
     @pytest.mark.asyncio
     async def test_check_deferred_price_below_ready(self):
         advisor = AIAdvisor(model="haiku")
         await advisor.defer("ETH", "SHORT", {"wait_until_price_below": 2000})
         ready = await advisor.check_deferred({"ETH": 1900})
-        assert "ETH" in ready
+        ready_syms = {k[0] for k in ready}
+        assert "ETH" in ready_syms
 
     @pytest.mark.asyncio
     async def test_check_deferred_no_conditions_ready_immediately(self):
         advisor = AIAdvisor(model="haiku")
         await advisor.defer("BTC", "LONG", {})
         ready = await advisor.check_deferred({})
-        assert "BTC" in ready
+        ready_syms = {k[0] for k in ready}
+        assert "BTC" in ready_syms
 
     @pytest.mark.asyncio
     async def test_check_deferred_multiple_symbols(self):
@@ -112,9 +154,10 @@ class TestDeferredTracking:
         await advisor.defer("SOL", "LONG", {"wait_until_price_above": 200})  # not ready
         advisor.set_cycle(5)
         ready = await advisor.check_deferred({"ETH": 1900, "SOL": 150})
-        assert "BTC" in ready
-        assert "ETH" in ready
-        assert "SOL" not in ready
+        ready_syms = {k[0] for k in ready}
+        assert "BTC" in ready_syms
+        assert "ETH" in ready_syms
+        assert "SOL" not in ready_syms
 
     def test_set_cycle(self):
         advisor = AIAdvisor(model="haiku")
@@ -225,13 +268,14 @@ class TestDeferredPersistence:
     async def test_defer_persists_to_db(self, db):
         advisor = AIAdvisor(model="haiku", db=db)
         advisor.set_cycle(5)
-        await advisor.defer("BTC", "SHORT", {"wait_cycles": 3})
+        await advisor.defer("BTC", "SHORT", {"wait_cycles": 3}, "mean_reversion")
 
         rows = await db.get_all_deferred("opportunity")
         assert len(rows) == 1
         assert rows[0]["symbol"] == "BTC"
         assert rows[0]["original_action"] == "SHORT"
         assert rows[0]["conditions"] == {"wait_cycles": 3}
+        assert rows[0]["strategy_type"] == "mean_reversion"
 
     @pytest.mark.asyncio
     async def test_defer_hold_persists_to_db(self, db):
@@ -245,9 +289,21 @@ class TestDeferredPersistence:
         assert rows[0]["original_action"] == "HOLD"
 
     @pytest.mark.asyncio
-    async def test_remove_deferred_deletes_from_db(self, db):
+    async def test_remove_deferred_specific_strategy_from_db(self, db):
         advisor = AIAdvisor(model="haiku", db=db)
-        await advisor.defer("BTC", "SHORT", {"wait_cycles": 3})
+        await advisor.defer("BTC", "SHORT", {"wait_cycles": 3}, "mr")
+        await advisor.defer("BTC", "LONG", {"wait_cycles": 5}, "tf")
+        await advisor.remove_deferred("BTC", "mr")
+
+        rows = await db.get_all_deferred("opportunity")
+        assert len(rows) == 1
+        assert rows[0]["strategy_type"] == "tf"
+
+    @pytest.mark.asyncio
+    async def test_remove_deferred_all_for_symbol_from_db(self, db):
+        advisor = AIAdvisor(model="haiku", db=db)
+        await advisor.defer("BTC", "SHORT", {"wait_cycles": 3}, "mr")
+        await advisor.defer("BTC", "LONG", {"wait_cycles": 5}, "tf")
         await advisor.remove_deferred("BTC")
 
         rows = await db.get_all_deferred("opportunity")
@@ -266,10 +322,11 @@ class TestDeferredPersistence:
     async def test_check_deferred_cleans_db(self, db):
         advisor = AIAdvisor(model="haiku", db=db)
         advisor.set_cycle(0)
-        await advisor.defer("BTC", "SHORT", {"wait_cycles": 2})
+        await advisor.defer("BTC", "SHORT", {"wait_cycles": 2}, "mr")
         advisor.set_cycle(5)
         ready = await advisor.check_deferred({})
-        assert "BTC" in ready
+        ready_syms = {k[0] for k in ready}
+        assert "BTC" in ready_syms
 
         rows = await db.get_all_deferred("opportunity")
         assert len(rows) == 0
@@ -277,8 +334,8 @@ class TestDeferredPersistence:
     @pytest.mark.asyncio
     async def test_load_deferred_clears_stale_on_startup(self, db):
         # Manually insert into DB (simulating previous session)
-        await db.upsert_deferred("BTC", "SHORT", 3, {"wait_cycles": 5}, "opportunity")
-        await db.upsert_deferred("ETH", "HOLD", 2, {"wait_until_price_below": 2000}, "hold")
+        await db.upsert_deferred("BTC", "SHORT", 3, {"wait_cycles": 5}, "opportunity", "mr")
+        await db.upsert_deferred("ETH", "HOLD", 2, {"wait_until_price_below": 2000}, "hold", "unknown")
 
         advisor = AIAdvisor(model="haiku", db=db)
         await advisor.load_deferred()
@@ -802,3 +859,14 @@ class TestValidateResponse:
         result = _validate_response(resp)
         assert len(result["positions"]) == 1
         assert result["positions"][0]["adjustments"]["stop_loss"] == 150
+
+    def test_flip_valid_position_action(self):
+        resp = {
+            "positions": [{"symbol": "ETH", "action": "FLIP", "reasoning": "trend reversal",
+                           "adjustments": {"stop_loss": 2050, "take_profit": 1900, "size_pct": 3.0, "leverage": 2}}],
+            "opportunities": [],
+        }
+        result = _validate_response(resp)
+        assert len(result["positions"]) == 1
+        assert result["positions"][0]["action"] == "FLIP"
+        assert result["positions"][0]["adjustments"]["stop_loss"] == 2050

@@ -41,12 +41,22 @@ from data.db import Database
 from risk.position_tracker import PositionTracker
 from risk.risk_manager import RiskManager, ValidationResult
 from strategies.base import Strategy
+from strategies.bb_squeeze import BbSqueezeStrategy
+from strategies.breakout import BreakoutStrategy
+from strategies.btc_correlation import BtcCorrelationStrategy
+from strategies.buy_the_dip import BuyTheDipStrategy
 from strategies.cooldown import CooldownTracker
+from strategies.ema_crossover import EmaCrossoverStrategy
+from strategies.funding_rate import FundingRateStrategy
+from strategies.macd_divergence import MacdDivergenceStrategy
 from strategies.mean_reversion import MeanReversionStrategy
+from strategies.mtf_confluence import MtfConfluenceStrategy
 from strategies.multi_strategy import MultiStrategy
 from strategies.rsi_divergence import RSIDivergenceStrategy
+from strategies.session_momentum import SessionMomentumStrategy
 from strategies.trend_filter import TrendFilter
 from strategies.trend_following import TrendFollowingStrategy
+from strategies.volume_spike import VolumeSpikeStrategy
 from utils.logger import setup_logging, get_logger
 from utils.telegram import TelegramNotifier
 
@@ -121,24 +131,84 @@ class Bot:
             db=self._db,
         )
 
+        # 10 new strategies
+        self._bb_squeeze = BbSqueezeStrategy(
+            self._market_data, self._trend_filter, self._cooldown,
+            self._positions, settings.risk, settings.strategy, db=self._db,
+        )
+        self._breakout = BreakoutStrategy(
+            self._market_data, self._trend_filter, self._cooldown,
+            self._positions, settings.risk, settings.strategy, db=self._db,
+        )
+        self._btc_correlation = BtcCorrelationStrategy(
+            self._market_data, self._trend_filter, self._cooldown,
+            self._positions, settings.risk,
+            btc_min_move_pct=settings.strategy.btc_min_move_pct,
+            btc_min_lag_pct=settings.strategy.btc_min_lag_pct,
+            btc_catch_up_pct=settings.strategy.btc_catch_up_pct,
+            db=self._db,
+        )
+        self._buy_the_dip = BuyTheDipStrategy(
+            self._market_data, self._trend_filter, self._cooldown,
+            self._positions, settings.risk, settings.strategy, db=self._db,
+        )
+        self._ema_crossover = EmaCrossoverStrategy(
+            self._market_data, self._trend_filter, self._cooldown,
+            self._positions, settings.risk, settings.strategy, db=self._db,
+        )
+        self._funding_rate = FundingRateStrategy(
+            self._market_data, self._trend_filter, self._cooldown,
+            self._positions, settings.risk, settings.strategy, db=self._db,
+        )
+        self._macd_divergence = MacdDivergenceStrategy(
+            self._market_data, self._trend_filter, self._cooldown,
+            self._positions, settings.risk, settings.strategy, db=self._db,
+        )
+        self._mtf_confluence = MtfConfluenceStrategy(
+            self._market_data, self._trend_filter, self._cooldown,
+            self._positions, settings.risk, settings.strategy, db=self._db,
+        )
+        self._session_momentum = SessionMomentumStrategy(
+            self._market_data, self._trend_filter, self._cooldown,
+            self._positions, settings.risk, settings.strategy, db=self._db,
+        )
+        self._volume_spike = VolumeSpikeStrategy(
+            self._market_data, self._trend_filter, self._cooldown,
+            self._positions, settings.risk,
+            spike_threshold=settings.strategy.vs_spike_threshold,
+            wick_ratio=settings.strategy.vs_wick_ratio,
+            db=self._db,
+        )
+
+        # Map strategy names to instances
+        self._strategy_map: dict[str, Strategy] = {
+            "mean_reversion": self._mean_rev,
+            "rsi_divergence": self._rsi_div,
+            "trend_following": self._trend_follow,
+            "bb_squeeze": self._bb_squeeze,
+            "breakout": self._breakout,
+            "btc_correlation": self._btc_correlation,
+            "buy_the_dip": self._buy_the_dip,
+            "ema_crossover": self._ema_crossover,
+            "funding_rate": self._funding_rate,
+            "macd_divergence": self._macd_divergence,
+            "mtf_confluence": self._mtf_confluence,
+            "session_momentum": self._session_momentum,
+            "volume_spike": self._volume_spike,
+        }
+
         # Build active strategy based on mode
-        if strategy_mode == "mean_reversion":
-            self._strategy: Strategy = self._mean_rev
+        if strategy_mode in self._strategy_map:
+            self._strategy: Strategy = self._strategy_map[strategy_mode]
         elif strategy_mode == "rsi_div":
             self._strategy = self._rsi_div
-        elif strategy_mode == "trend_following":
-            self._strategy = self._trend_follow
         else:  # "multi" (default)
             sub_strategies: list[Strategy] = []
             for name in settings.strategy.active_strategies:
-                if name == "mean_reversion":
-                    sub_strategies.append(self._mean_rev)
-                elif name == "rsi_divergence":
-                    sub_strategies.append(self._rsi_div)
-                elif name == "trend_following":
-                    sub_strategies.append(self._trend_follow)
+                if name in self._strategy_map:
+                    sub_strategies.append(self._strategy_map[name])
             if not sub_strategies:
-                sub_strategies = [self._mean_rev, self._rsi_div, self._trend_follow]
+                sub_strategies = list(self._strategy_map.values())
             self._strategy = MultiStrategy(sub_strategies)
 
         self._telegram = TelegramNotifier(settings.telegram)
@@ -220,13 +290,12 @@ class Bot:
         intervals = list(self._settings.market.intervals)
         await self._market_data.start(self._active_coins, intervals=intervals)
 
-        # Strategies — pass discovered coins
-        self._mean_rev.set_coins(self._active_coins)
-        self._mean_rev.set_max_funding_rate(cfg.max_funding_rate)
-        self._rsi_div.set_coins(self._active_coins)
-        self._rsi_div.set_max_funding_rate(cfg.max_funding_rate)
-        self._trend_follow.set_coins(self._active_coins)
-        self._trend_follow.set_max_funding_rate(cfg.max_funding_rate)
+        # Strategies — pass discovered coins to all strategy instances
+        for strat in self._strategy_map.values():
+            if hasattr(strat, "set_coins"):
+                strat.set_coins(self._active_coins)
+            if hasattr(strat, "set_max_funding_rate"):
+                strat.set_max_funding_rate(cfg.max_funding_rate)
         await self._strategy.start()
 
         # Risk manager
@@ -369,21 +438,29 @@ class Bot:
         await self._strategy.update()
 
         # 5. Generate autonomous decisions
-        candidates = await self._strategy.generate_decisions()
+        # For MultiStrategy with AI: collect raw (unmerged) decisions, filter deferred, then merge
+        is_multi = isinstance(self._strategy, MultiStrategy)
+        if is_multi and not self._no_ai:
+            raw_candidates = await self._strategy.generate_raw_decisions()
+            raw_candidates.sort(key=lambda d: d.confidence, reverse=True)
+        else:
+            raw_candidates = await self._strategy.generate_decisions()
 
-        _signals_generated = sum(1 for d in candidates if d.action in ("BUY", "SHORT"))
+        _signals_generated = sum(1 for d in raw_candidates if d.action in ("BUY", "SHORT"))
 
-        if candidates:
+        if raw_candidates:
             logger.info(
-                "Strategy generated %d candidate(s): %s",
-                len(candidates),
-                ", ".join(f"{d.action} {d.symbol}" for d in candidates),
+                "Strategy generated %d raw candidate(s): %s",
+                len(raw_candidates),
+                ", ".join(f"{d.action} {d.symbol}[{d.strategy_type}]" for d in raw_candidates[:20]),
             )
         else:
             logger.info("No trading candidates this cycle")
 
-        # 5b. Check deferred opportunities
+        # 5b. Deferred opportunity pipeline (per symbol+strategy_type)
+        ready_keys: set[tuple[str, str]] = set()
         ready_symbols: set[str] = set()
+        candidates = raw_candidates
         if not self._no_ai:
             self._advisor.set_cycle(self._cycle_count)
             mid_prices = {
@@ -392,41 +469,46 @@ class Bot:
                 if self._market_data.get_mid_price(c)
             }
 
-            # Clean up stale deferred: remove entries whose signal has disappeared
-            candidate_syms = {d.symbol for d in candidates if d.symbol}
+            # Step 3: Clean stale deferred — remove entries whose signal has disappeared
+            candidate_keys = {
+                (d.symbol, d.strategy_type or "unknown")
+                for d in raw_candidates if d.symbol
+            }
             stale = [
-                sym for sym in self._advisor.deferred_symbols
-                if sym not in candidate_syms
+                k for k in self._advisor.deferred_keys
+                if k not in candidate_keys
             ]
-            for sym in stale:
-                await self._advisor.remove_deferred(sym)
-                logger.info("Removed stale deferred %s — signal no longer present", sym)
+            for sym, strat in stale:
+                await self._advisor.remove_deferred(sym, strat)
+                logger.info("Removed stale deferred %s/%s — signal no longer present", sym, strat)
 
             # Check which deferred have met their conditions
-            ready_symbols = set(await self._advisor.check_deferred(mid_prices))
-            for sym in ready_symbols:
-                if sym not in candidate_syms:
-                    await self._advisor.remove_deferred(sym)  # conditions met but signal gone
+            ready_keys = set(await self._advisor.check_deferred(mid_prices))
+            ready_symbols = {k[0] for k in ready_keys}
+            for sym, strat in ready_keys:
+                if (sym, strat) not in candidate_keys:
+                    await self._advisor.remove_deferred(sym, strat)
 
-            # Filter out candidates for symbols still deferred (same direction only).
-            # If the new candidate is opposite direction, cancel the deferred and let it through.
-            deferred_syms = self._advisor.deferred_symbols
-            if deferred_syms:
-                keep: list = []
+            # Step 4: Filter out candidates whose (sym, strat) is deferred
+            # Exception: if direction is opposite → cancel deferred, let through
+            deferred_keys = self._advisor.deferred_keys
+            if deferred_keys:
+                keep: list[Decision] = []
                 filtered_names: list[str] = []
-                for d in candidates:
-                    if d.symbol in deferred_syms:
-                        deferred_action = self._advisor.get_deferred_action(d.symbol)
+                for d in raw_candidates:
+                    key = (d.symbol or "", d.strategy_type or "unknown")
+                    if key in deferred_keys:
+                        deferred_action = self._advisor.get_deferred_action(d.symbol or "", d.strategy_type)
                         if deferred_action and d.action != deferred_action:
                             # Opposite direction → cancel deferred, let new candidate through
-                            await self._advisor.remove_deferred(d.symbol)
+                            await self._advisor.remove_deferred(d.symbol or "", d.strategy_type)
                             logger.info(
-                                "Cancelled deferred %s %s — new opposite signal: %s %s",
-                                deferred_action, d.symbol, d.action, d.symbol,
+                                "Cancelled deferred %s %s/%s — opposite signal: %s",
+                                deferred_action, d.symbol, d.strategy_type, d.action,
                             )
                             keep.append(d)
                         else:
-                            filtered_names.append(f"{d.action} {d.symbol}")
+                            filtered_names.append(f"{d.action} {d.symbol}[{d.strategy_type}]")
                     else:
                         keep.append(d)
                 if filtered_names:
@@ -435,6 +517,12 @@ class Bot:
                         len(filtered_names), ", ".join(filtered_names),
                     )
                 candidates = keep
+            else:
+                candidates = list(raw_candidates)
+
+            # Step 5: Merge per coin (only for multi strategy with AI)
+            if is_multi:
+                candidates = MultiStrategy.merge(candidates)
 
         # 6. AI advisor call
         open_positions = await self._positions.get_open_positions()
@@ -496,21 +584,25 @@ class Bot:
                         )
                 opportunities.append(opp)
 
-        # Cap opportunities by score; deferred-ready always pass through
+        # Cap opportunities: score >= 0.7 required (deferred-ready exempt), top 15 by score
+        MIN_SCORE_FOR_AI = 0.70
         MAX_OPPORTUNITIES_PER_CYCLE = 15
-        if len(opportunities) > MAX_OPPORTUNITIES_PER_CYCLE:
-            deferred_ready_opps = [o for o in opportunities if o["symbol"] in ready_symbols]
-            regular_opps = [o for o in opportunities if o["symbol"] not in ready_symbols]
-            regular_opps.sort(key=lambda o: o["confidence"], reverse=True)
-            remaining_slots = max(0, MAX_OPPORTUNITIES_PER_CYCLE - len(deferred_ready_opps))
-            dropped = len(regular_opps) - remaining_slots
-            opportunities = deferred_ready_opps + regular_opps[:remaining_slots]
-            if dropped > 0:
-                logger.info(
-                    "Capped opportunities: %d sent (deferred_ready=%d, top_scored=%d, dropped=%d)",
-                    len(opportunities), len(deferred_ready_opps),
-                    min(remaining_slots, len(regular_opps)), dropped,
-                )
+        deferred_ready_opps = [o for o in opportunities if o["symbol"] in ready_symbols]
+        regular_opps = [o for o in opportunities if o["symbol"] not in ready_symbols]
+        # Filter: only score >= 0.7 for non-deferred opportunities
+        qualified = [o for o in regular_opps if o["confidence"] >= MIN_SCORE_FOR_AI]
+        below_threshold = len(regular_opps) - len(qualified)
+        # Merge deferred-ready + qualified, sort by score, take top 15
+        all_eligible = deferred_ready_opps + qualified
+        all_eligible.sort(key=lambda o: o["confidence"], reverse=True)
+        opportunities = all_eligible[:MAX_OPPORTUNITIES_PER_CYCLE]
+        dropped = len(all_eligible) - len(opportunities)
+        if below_threshold > 0 or dropped > 0:
+            logger.info(
+                "Filtered opportunities: %d sent (deferred_ready=%d, qualified=%d, below_%.0f=%d, cap_dropped=%d)",
+                len(opportunities), len(deferred_ready_opps),
+                len(qualified), MIN_SCORE_FOR_AI * 100, below_threshold, dropped,
+            )
 
         # Filter out positions with deferred holds
         positions_for_ai = open_positions
@@ -551,6 +643,9 @@ class Bot:
             trade_stats = await self._db.get_trade_stats()
             account["win_rate"] = trade_stats.get("win_rate", 0)
             account["consec_losses"] = trade_stats.get("consecutive_losses", 0)
+            account["default_leverage"] = self._settings.hyperliquid.default_leverage
+            account["usdc_per_position"] = self._settings.risk.usdc_per_position
+            account["max_trade_pct"] = self._settings.risk.max_trade_pct
 
             deferred_summary = self._advisor.get_deferred_summary()
             ai_response = await self._advisor.consult(
@@ -613,6 +708,19 @@ class Bot:
                         strategy_type="ai_advisor",
                         size_pct=adj.get("size_pct"),
                     ))
+                elif pa["action"] == "FLIP":
+                    adj = pa.get("adjustments", {})
+                    candidates.append(Decision(
+                        action="FLIP",
+                        symbol=pa["symbol"],
+                        confidence=0.9,
+                        reasoning=f"AI: {pa.get('reasoning', '')}",
+                        strategy_type="ai_advisor",
+                        stop_loss=adj.get("stop_loss"),
+                        take_profit=adj.get("take_profit"),
+                        size_pct=adj.get("size_pct"),
+                        leverage=adj.get("leverage"),
+                    ))
                 elif pa["action"] == "HOLD":
                     defer_cond = pa.get("defer")
                     if defer_cond:
@@ -639,10 +747,12 @@ class Bot:
             approved: list[Decision] = []
             for oa in ai_response.get("opportunities", []):
                 if oa["action"] == "HOLD":
-                    # Defer the opportunity
+                    # Defer the opportunity — keyed by (symbol, strategy_type)
                     orig = next((d for d in candidates if d.symbol == oa["symbol"]), None)
                     original_action = orig.action if orig else "BUY"
-                    await self._advisor.defer(oa["symbol"], original_action, oa.get("defer", {}))
+                    strategy_type = orig.strategy_type if orig else "unknown"
+                    orig_confidence = orig.confidence if orig else 0.0
+                    await self._advisor.defer(oa["symbol"], original_action, oa.get("defer", {}), strategy_type, orig_confidence)
                     continue
 
                 # BUY or SHORT — find the original candidate and apply adjustments
@@ -659,8 +769,8 @@ class Bot:
                         orig.leverage = adj["leverage"]
                     approved.append(orig)
 
-            # Keep AI-approved entries + all CLOSE/SELL/SCALE_UP decisions
-            candidates = approved + [d for d in candidates if d.action in ("CLOSE", "SELL", "SCALE_UP")]
+            # Keep AI-approved entries + all CLOSE/SELL/SCALE_UP/FLIP decisions
+            candidates = approved + [d for d in candidates if d.action in ("CLOSE", "SELL", "SCALE_UP", "FLIP")]
 
         # 6b. Protect positions with profitable SL from premature strategy exits
         # When trailing SL is already in profit, only AI or SL/TP monitor should close
@@ -687,11 +797,11 @@ class Bot:
                         dropped, ", ".join(protected_syms),
                     )
 
-        # 7. Sort: CLOSE first, then SCALE_UP, then entries
-        _ACTION_ORDER = {"SELL": 0, "CLOSE": 0, "SCALE_UP": 1, "BUY": 2, "SHORT": 2, "HOLD": 3}
+        # 7. Sort: CLOSE/FLIP first, then SCALE_UP, then entries
+        _ACTION_ORDER = {"SELL": 0, "CLOSE": 0, "FLIP": 0, "SCALE_UP": 1, "BUY": 2, "SHORT": 2, "HOLD": 3}
         candidates.sort(key=lambda d: _ACTION_ORDER.get(d.action, 3))
 
-        # Anti-churning
+        # Anti-churning (FLIP excluded — it's an intentional reopen)
         close_syms = {d.symbol for d in candidates if d.action in ("SELL", "CLOSE") and d.symbol}
         if close_syms:
             before = len(candidates)
@@ -879,11 +989,11 @@ class Bot:
     # ── Position SL/TP monitoring ─────────────────────────────
 
     async def _sl_tp_monitor(self) -> None:
-        """Independent SL/TP check every ~20 seconds."""
-        logger.info("SL/TP monitor started (interval: 20s)")
+        """Independent SL/TP check every ~5 seconds."""
+        logger.info("SL/TP monitor started (interval: 5s)")
         while self._running:
             try:
-                await asyncio.wait_for(self._shutdown_event.wait(), timeout=20)
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=5)
                 break  # shutdown signalled
             except asyncio.TimeoutError:
                 pass
@@ -917,7 +1027,11 @@ class Bot:
                 if mid and mid > 0:
                     prices[sym] = mid
                 else:
-                    logger.warning("No price available for %s — SL/TP check skipped", sym)
+                    logger.warning("No price for %s — SL/TP skipped (mid_prices has %d coins)", sym, len(self._market_data._mid_prices))
+
+        if prices:
+            for sym, px in prices.items():
+                logger.info("SL/TP price %s: %g", sym, px)
 
         to_close = await self._positions.check_sl_tp(prices)
 
@@ -1337,6 +1451,8 @@ class Bot:
                 return await self._execute_entry(decision, size, is_buy=False)
             elif decision.action == "SCALE_UP":
                 return await self._execute_scale_up(decision, size)
+            elif decision.action == "FLIP":
+                return await self._execute_flip(decision, size)
             elif decision.action in ("SELL", "CLOSE"):
                 return await self._execute_close(decision)
         except Exception:
@@ -1437,6 +1553,54 @@ class Bot:
                         )
                     except Exception:
                         logger.debug("Failed to log POSITION_SCALED event", exc_info=True)
+            return None
+
+        elif decision.action == "FLIP":
+            pos = await self._positions.get_position_for_symbol(symbol)
+            if pos:
+                old_direction = pos.get("direction", "LONG")
+                new_direction = "SHORT" if old_direction == "LONG" else "LONG"
+                # Close existing
+                pnl = await self._positions.close_position(pos["id"], price, "flip")
+                await self._db.insert_trade(
+                    symbol=symbol, side="CLOSE", price=price,
+                    quantity=pos["quantity"], pnl=pnl,
+                    strategy="ai_advisor", notes="[PAPER] FLIP close",
+                )
+                logger.info("[PAPER] FLIP close %s %s @ %g PnL=%.4f", old_direction, symbol, price, pnl)
+                self._cooldown.record_trade_result(symbol, pnl > 0)
+                # Open new in opposite direction
+                new_leverage = decision.leverage or pos.get("leverage", self._settings.hyperliquid.default_leverage)
+                notional = (size.size_usdc * new_leverage) if size and size.size_usdc > 0 else 0
+                qty = notional / price if price > 0 else 0
+                qty = self._client.round_size(symbol, qty)
+                if qty > 0:
+                    new_side = "BUY" if new_direction == "LONG" else "SHORT"
+                    await self._positions.open_position(
+                        symbol=symbol, entry_price=price, quantity=qty,
+                        stop_loss=decision.stop_loss, take_profit=decision.take_profit,
+                        strategy="ai_advisor", direction=new_direction, leverage=new_leverage,
+                    )
+                    await self._db.insert_trade(
+                        symbol=symbol, side=new_side, price=price, quantity=qty,
+                        strategy="ai_advisor", notes=f"[PAPER] FLIP open {new_direction}",
+                    )
+                    logger.info("[PAPER] FLIP open %s %s qty=%.6f @ %g lev=%dx", new_direction, symbol, qty, price, new_leverage)
+                try:
+                    await self._db.insert_event(
+                        cycle=self._cycle_count, symbol=symbol,
+                        event_type="TRADE_EXIT", source="execution", action="FLIP",
+                        details={"price": round(price, 6), "pnl": round(pnl, 4), "old_direction": old_direction, "paper": True},
+                        position_id=pos["id"],
+                    )
+                    await self._db.insert_event(
+                        cycle=self._cycle_count, symbol=symbol,
+                        event_type="TRADE_ENTRY", source="execution", action="FLIP",
+                        details={"price": round(price, 6), "new_direction": new_direction, "quantity": qty, "paper": True},
+                    )
+                except Exception:
+                    logger.debug("Failed to log FLIP events", exc_info=True)
+                return pnl
             return None
 
         elif decision.action in ("SELL", "CLOSE"):
@@ -1614,6 +1778,115 @@ class Bot:
             logger.debug("Failed to log POSITION_SCALED event", exc_info=True)
         return None
 
+    async def _execute_flip(self, decision: Decision, size: Any) -> float | None:
+        """Execute a FLIP: close losing position + open in opposite direction."""
+        symbol = decision.symbol
+        pos = await self._positions.get_position_for_symbol(symbol)
+
+        if not pos:
+            logger.warning("FLIP %s: no position in tracker — skipping", symbol)
+            return None
+
+        old_direction = pos.get("direction", "LONG")
+        new_direction = "SHORT" if old_direction == "LONG" else "LONG"
+        is_buy = new_direction == "LONG"
+
+        # Step 1: Close existing position
+        await self._client.close_position(symbol)
+        mid = self._market_data.get_mid_price(symbol)
+        fill_price = mid or await self._client.get_price(symbol)
+        pnl = await self._positions.close_position(pos["id"], fill_price, "flip")
+
+        await self._db.insert_trade(
+            symbol=symbol, side="CLOSE", price=fill_price,
+            quantity=pos["quantity"], pnl=pnl,
+            strategy="ai_advisor", notes="FLIP close",
+        )
+        self._cooldown.record_trade_result(symbol, pnl > 0)
+        logger.info("FLIP close %s %s @ %g PnL=%.4f", old_direction, symbol, fill_price, pnl)
+
+        try:
+            await self._db.insert_event(
+                cycle=self._cycle_count, symbol=symbol,
+                event_type="TRADE_EXIT", source="execution", action="FLIP",
+                details={"price": round(fill_price, 6), "pnl": round(pnl, 4) if pnl else None, "old_direction": old_direction},
+                position_id=pos["id"],
+            )
+        except Exception:
+            logger.debug("Failed to log FLIP TRADE_EXIT event", exc_info=True)
+
+        # Step 2: Open new position in opposite direction
+        new_leverage = decision.leverage or pos.get("leverage", self._settings.hyperliquid.default_leverage)
+        new_leverage = min(new_leverage, self._settings.risk.max_leverage)
+        price = await self._client.get_price(symbol)
+
+        try:
+            is_cross = self._settings.hyperliquid.margin_mode == "cross"
+            await self._client.update_leverage(symbol, new_leverage, is_cross)
+        except Exception:
+            logger.warning("Failed to set leverage for FLIP %s", symbol)
+
+        notional = (size.size_usdc * new_leverage) if size and size.size_usdc > 0 else 0
+        raw_qty = notional / price if price > 0 else 0
+        qty = self._client.round_size(symbol, raw_qty)
+
+        if qty <= 0:
+            logger.critical(
+                "FLIP %s: closed %s but new qty is 0 — position closed but NOT reopened!",
+                symbol, old_direction,
+            )
+            return pnl
+
+        try:
+            await self._client.place_market_order(coin=symbol, is_buy=is_buy, size=qty)
+        except Exception:
+            logger.critical(
+                "FLIP %s: closed %s but OPEN failed — position is FLAT on HL, not tracked!",
+                symbol, old_direction,
+            )
+            raise
+
+        try:
+            await self._positions.open_position(
+                symbol=symbol, entry_price=price, quantity=qty,
+                stop_loss=decision.stop_loss, take_profit=decision.take_profit,
+                strategy="ai_advisor", direction=new_direction, leverage=new_leverage,
+            )
+        except Exception:
+            logger.critical(
+                "FLIP %s: opened %s on HL but tracker FAILED — position LIVE but untracked!",
+                symbol, new_direction,
+            )
+            raise
+
+        new_side = "BUY" if is_buy else "SHORT"
+        await self._db.insert_trade(
+            symbol=symbol, side=new_side, price=price,
+            quantity=qty, strategy="ai_advisor", notes=f"FLIP open {new_direction}",
+        )
+        await self._telegram.notify_trade(
+            action="FLIP", symbol=symbol, qty=qty, price=price,
+        )
+        logger.info(
+            "FLIP executed: %s → %s %s qty=%.6f @ %g lev=%dx",
+            old_direction, new_direction, symbol, qty, price, new_leverage,
+        )
+
+        try:
+            await self._db.insert_event(
+                cycle=self._cycle_count, symbol=symbol,
+                event_type="TRADE_ENTRY", source="execution", action="FLIP",
+                details={
+                    "price": round(price, 6), "quantity": qty,
+                    "new_direction": new_direction, "leverage": new_leverage,
+                    "old_direction": old_direction,
+                },
+            )
+        except Exception:
+            logger.debug("Failed to log FLIP TRADE_ENTRY event", exc_info=True)
+
+        return pnl
+
     async def _execute_close(self, decision: Decision) -> float | None:
         """Close a position on Hyperliquid. Returns PnL."""
         symbol = decision.symbol
@@ -1698,9 +1971,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--once", action="store_true", help="Run one cycle then exit")
     parser.add_argument(
         "--strategy",
-        choices=["multi", "mean_reversion", "rsi_div", "trend_following"],
+        choices=[
+            "multi", "mean_reversion", "rsi_div", "trend_following",
+            "bb_squeeze", "breakout", "btc_correlation", "buy_the_dip",
+            "ema_crossover", "funding_rate", "macd_divergence",
+            "mtf_confluence", "session_momentum", "volume_spike",
+        ],
         default="multi",
-        help="Strategy mode: multi (default), mean_reversion, rsi_div, trend_following",
+        help="Strategy mode: multi (default) or single strategy name",
     )
     return parser.parse_args()
 

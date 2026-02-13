@@ -55,8 +55,8 @@ class MultiStrategy(Strategy):
 
     # -- Decision merging --
 
-    async def generate_decisions(self) -> list[Decision]:
-        """Collect decisions from all sub-strategies and merge per coin."""
+    async def generate_raw_decisions(self) -> list[Decision]:
+        """Collect from all sub-strategies WITHOUT merging."""
         all_decisions: list[Decision] = []
         for s in self._strategies:
             try:
@@ -64,13 +64,17 @@ class MultiStrategy(Strategy):
                 all_decisions.extend(decisions)
             except Exception:
                 logger.exception("Error generating decisions from %s", type(s).__name__)
+        return all_decisions
 
+    async def generate_decisions(self) -> list[Decision]:
+        """Collect decisions from all sub-strategies and merge per coin."""
+        all_decisions = await self.generate_raw_decisions()
         if not all_decisions:
             return []
+        return self.merge(all_decisions)
 
-        return self._merge(all_decisions)
-
-    def _merge(self, decisions: list[Decision]) -> list[Decision]:
+    @staticmethod
+    def merge(decisions: list[Decision]) -> list[Decision]:
         """Merge decisions: deduplicate per coin, handle conflicts, boost agreement."""
         # Separate exits (CLOSE/SELL) from entries (BUY/SHORT)
         exits: list[Decision] = []
@@ -137,7 +141,7 @@ class MultiStrategy(Strategy):
                         f"[Multi: {'+'.join(strat_names)}] "
                         f"{best.reasoning} (boosted {best.confidence:.2f}->{boosted:.2f})"
                     ),
-                    strategy_type="multi",
+                    strategy_type=best.strategy_type,
                     size_pct=best.size_pct,
                     order_type=best.order_type,
                     stop_loss=best.stop_loss,
