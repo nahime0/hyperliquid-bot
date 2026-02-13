@@ -65,6 +65,7 @@ class RiskConfig:
     # Grace period: skip SL/TP check for newly opened positions
     sl_tp_grace_seconds: int = 30
     # Trailing stop
+    trailing_half_pct: float = 0.5        # move SL to midpoint (entry+SL)/2 after +X%
     trailing_breakeven_pct: float = 1.0   # move SL to entry after +X%
     trailing_start_pct: float = 1.5       # start trailing after +X%
     trailing_distance_pct: float = 1.0    # trail at max_price - X%
@@ -175,6 +176,7 @@ def load_settings() -> Settings:
             usdc_per_position=float(os.getenv("USDC_PER_POSITION", "25.0")),
             min_balance_usdc=float(os.getenv("MIN_BALANCE_USDC", "50.0")),
             min_holding_minutes=int(os.getenv("MIN_HOLDING_MINUTES", "15")),
+            trailing_half_pct=float(os.getenv("TRAILING_HALF_PCT", "0.5")),
             trailing_breakeven_pct=float(os.getenv("TRAILING_BREAKEVEN_PCT", "1.0")),
             trailing_start_pct=float(os.getenv("TRAILING_START_PCT", "1.5")),
             trailing_distance_pct=float(os.getenv("TRAILING_DISTANCE_PCT", "1.0")),

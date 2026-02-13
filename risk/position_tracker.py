@@ -255,6 +255,10 @@ class PositionTracker:
             new_trailing = new_max * (1 - trail_pct / 100)
         elif gain_pct >= self._rc.trailing_breakeven_pct:
             new_trailing = entry
+        elif gain_pct >= self._rc.trailing_half_pct:
+            # Midpoint between original SL and entry — reduce risk without breakeven
+            original_sl = pos.get("original_sl") or pos.get("stop_loss") or 0.0
+            new_trailing = (entry + original_sl) / 2
 
         # SL only moves up for LONG
         new_trailing = max(new_trailing, old_trailing)
@@ -311,6 +315,10 @@ class PositionTracker:
             new_trailing = new_min * (1 + trail_pct / 100)
         elif gain_pct >= self._rc.trailing_breakeven_pct:
             new_trailing = entry
+        elif gain_pct >= self._rc.trailing_half_pct:
+            # Midpoint between original SL and entry — reduce risk without breakeven
+            original_sl = pos.get("original_sl") or pos.get("stop_loss") or float("inf")
+            new_trailing = (entry + original_sl) / 2
 
         # SL only moves down for SHORT
         new_trailing = min(new_trailing, old_trailing)

@@ -53,17 +53,32 @@ class TestTrailingWithAccuratePrices:
         assert pos["trailing_sl"] is None or pos["trailing_sl"] <= 0.1520
 
     @pytest.mark.asyncio
-    async def test_trailing_no_update_below_breakeven(self, tracker):
-        """LONG: price rises 0.5% (below breakeven 1%) → no trail update."""
+    async def test_trailing_half_step_at_half_pct(self, tracker):
+        """LONG: price rises 0.5% → trailing moves to midpoint (entry+SL)/2."""
+        entry = 0.15358
+        sl = 0.1520
+        await tracker.open_position(
+            symbol="ME", entry_price=entry, quantity=130.0,
+            stop_loss=sl, direction="LONG",
+        )
+        # +0.5% = 0.15435 — hits half step threshold
+        await tracker.check_sl_tp({"ME": 0.15435})
+        pos = await tracker.get_position_for_symbol("ME")
+        assert pos["max_price_seen"] == pytest.approx(0.15435, rel=1e-4)
+        trail = pos.get("trailing_sl") or pos.get("stop_loss")
+        midpoint = (entry + sl) / 2  # 0.15279
+        assert trail == pytest.approx(midpoint, rel=1e-4)
+
+    @pytest.mark.asyncio
+    async def test_trailing_no_update_below_half(self, tracker):
+        """LONG: price rises 0.3% (below half 0.5%) → no trail update."""
         await tracker.open_position(
             symbol="ME", entry_price=0.15358, quantity=130.0,
             stop_loss=0.1520, direction="LONG",
         )
-        # +0.5% = 0.15435 — below breakeven threshold (1%)
-        await tracker.check_sl_tp({"ME": 0.15435})
+        # +0.3% = 0.15404 — below half threshold
+        await tracker.check_sl_tp({"ME": 0.15404})
         pos = await tracker.get_position_for_symbol("ME")
-        # max_price_seen should update but trailing_sl should not activate
-        assert pos["max_price_seen"] == pytest.approx(0.15435, rel=1e-4)
         trail = pos.get("trailing_sl") or pos.get("stop_loss")
         assert trail <= 0.1520  # Still at original SL
 
