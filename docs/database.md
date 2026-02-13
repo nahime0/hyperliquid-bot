@@ -51,6 +51,7 @@ WAL mode e' abilitato per permettere letture concorrenti (Next.js dashboard via 
 | `leverage` | INTEGER | Leva utilizzata (default: 1) |
 | `liquidation_price` | REAL | Prezzo di liquidazione |
 | `funding_paid` | REAL | Funding pagato (default: 0) |
+| `ask_close` | INTEGER | 1 se richiesta chiusura manuale dalla webapp (default: 0) |
 
 ### `balance_snapshots` — Storico bilancio
 
@@ -112,6 +113,8 @@ _MIGRATIONS = [
     "ALTER TABLE positions ADD COLUMN funding_paid REAL DEFAULT 0",
     "ALTER TABLE positions ADD COLUMN min_price_seen REAL",
     "ALTER TABLE trades ADD COLUMN direction TEXT DEFAULT 'LONG'",
+    "ALTER TABLE positions ADD COLUMN partial_closed INTEGER DEFAULT 0",
+    "ALTER TABLE positions ADD COLUMN ask_close INTEGER DEFAULT 0",
 ]
 ```
 
@@ -149,3 +152,7 @@ FROM ai_decisions GROUP BY tier
 ## Dashboard queries
 
 La dashboard Next.js (`web/`) legge il DB in read-only (WAL mode) tramite `better-sqlite3`. I dati vengono aggiornati automaticamente via SWR polling lato client.
+
+### Chiusura manuale (ask_close)
+
+La dashboard puo' richiedere la chiusura di una posizione tramite `POST /api/positions/close` con `{ "position_id": N }`. Questo setta `ask_close = 1` sulla posizione tramite una connessione DB scrivibile separata (`getWriteDb()`). Il bot controlla ogni ~20 secondi (nel monitor SL/TP) le posizioni con `ask_close = 1` e le chiude al prezzo corrente di mercato. L'evento viene loggato come `MANUAL_CLOSE` con source `webapp`.

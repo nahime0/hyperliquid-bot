@@ -172,6 +172,7 @@ _MIGRATIONS = [
     "ALTER TABLE positions ADD COLUMN min_price_seen REAL",
     "ALTER TABLE trades ADD COLUMN direction TEXT DEFAULT 'LONG'",
     "ALTER TABLE positions ADD COLUMN partial_closed INTEGER DEFAULT 0",
+    "ALTER TABLE positions ADD COLUMN ask_close INTEGER DEFAULT 0",
 ]
 
 
@@ -529,6 +530,25 @@ class Database:
     async def delete_state(self, key: str) -> None:
         await self.db.execute("DELETE FROM bot_state WHERE key = ?", (key,))
         await self.db.commit()
+
+    # ── Ask Close ──────────────────────────────────────────
+
+    async def set_ask_close(self, position_id: int) -> bool:
+        """Mark an open position for manual close. Returns True if updated."""
+        cursor = await self.db.execute(
+            "UPDATE positions SET ask_close = 1 WHERE id = ? AND status = 'OPEN'",
+            (position_id,),
+        )
+        await self.db.commit()
+        return cursor.rowcount > 0
+
+    async def get_ask_close_positions(self) -> list[dict[str, Any]]:
+        """Get open positions flagged for manual close."""
+        cursor = await self.db.execute(
+            "SELECT * FROM positions WHERE status = 'OPEN' AND ask_close = 1 ORDER BY id"
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
 
     # ── Stats helpers ───────────────────────────────────────
 
