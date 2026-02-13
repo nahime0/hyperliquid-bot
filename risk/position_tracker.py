@@ -261,7 +261,9 @@ class PositionTracker:
             original_sl = pos.get("original_sl") or pos.get("stop_loss") or 0.0
             new_trailing = (entry + original_sl) / 2
 
-        # SL only moves up for LONG
+        # Clamp: SL must stay below current price (otherwise it triggers immediately)
+        new_trailing = min(new_trailing, current_price)
+        # SL only moves up for LONG (monotonically increasing)
         new_trailing = max(new_trailing, old_trailing)
 
         if new_max != max_seen or new_trailing != old_trailing:
@@ -322,7 +324,9 @@ class PositionTracker:
             original_sl = pos.get("original_sl") or pos.get("stop_loss") or float("inf")
             new_trailing = (entry + original_sl) / 2
 
-        # SL only moves down for SHORT
+        # Clamp: SL must stay above current price (otherwise it triggers immediately)
+        new_trailing = max(new_trailing, current_price)
+        # SL only moves down for SHORT (monotonically decreasing)
         new_trailing = min(new_trailing, old_trailing)
 
         if new_min != min_seen or new_trailing != old_trailing:
