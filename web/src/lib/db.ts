@@ -4,6 +4,7 @@ import path from "path";
 const DB_PATH = path.resolve(process.cwd(), "..", "data", "trading_bot.db");
 
 let _db: Database.Database | null = null;
+let _dbWrite: Database.Database | null = null;
 
 export function getDb(): Database.Database {
   if (!_db) {
@@ -12,4 +13,13 @@ export function getDb(): Database.Database {
     _db.pragma("query_only = ON");
   }
   return _db;
+}
+
+export function getWriteDb(): Database.Database {
+  if (!_dbWrite) {
+    _dbWrite = new Database(DB_PATH, { fileMustExist: true });
+    _dbWrite.pragma("journal_mode = WAL");
+    _dbWrite.pragma("busy_timeout = 5000");
+  }
+  return _dbWrite;
 }

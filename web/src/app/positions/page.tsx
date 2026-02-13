@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useState, useCallback } from "react";
 import { useOpenPositions, useClosedPositions } from "@/hooks/usePositions";
 import { Card, Skeleton } from "@/components/shared/Card";
 import { PnlBadge } from "@/components/shared/PnlBadge";
@@ -76,8 +76,9 @@ function PositionDetail({ position: p }: { position: Position }) {
 }
 
 function OpenTab() {
-  const { positions, isLoading } = useOpenPositions();
+  const { positions, isLoading, mutate } = useOpenPositions();
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
+  const [closing, setClosing] = useState<Set<number>>(new Set());
 
   const toggle = (id: number) => {
     setExpanded((prev) => {
@@ -86,6 +87,28 @@ function OpenTab() {
       return next;
     });
   };
+
+  const requestClose = useCallback(async (positionId: number) => {
+    setClosing((prev) => new Set(prev).add(positionId));
+    try {
+      const res = await fetch("/api/positions/close", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ position_id: positionId }),
+      });
+      if (res.ok) {
+        mutate();
+      }
+    } catch {
+      // silently fail — will retry on next click
+    } finally {
+      setClosing((prev) => {
+        const next = new Set(prev);
+        next.delete(positionId);
+        return next;
+      });
+    }
+  }, [mutate]);
 
   if (isLoading) return <Skeleton className="w-full h-40" />;
 
@@ -108,7 +131,8 @@ function OpenTab() {
             <th className="text-right py-2.5 px-2">Trail SL</th>
             <th className="text-right py-2.5 px-2">Leverage</th>
             <th className="text-left py-2.5 px-2">Strategy</th>
-            <th className="text-right py-2.5 px-3">Opened</th>
+            <th className="text-right py-2.5 px-2">Opened</th>
+            <th className="text-center py-2.5 px-3">Close</th>
           </tr>
         </thead>
         <tbody>
@@ -128,11 +152,30 @@ function OpenTab() {
                 <td className="py-2.5 px-2 text-right font-mono text-warning">{p.trailing_sl ? formatPrice(p.trailing_sl) : "—"}</td>
                 <td className="py-2.5 px-2 text-right"><span className="text-accent font-medium">{p.leverage}x</span></td>
                 <td className="py-2.5 px-2 text-text-muted text-xs">{p.strategy}</td>
-                <td className="py-2.5 px-3 text-right"><TimeAgo date={p.opened_at} /></td>
+                <td className="py-2.5 px-2 text-right"><TimeAgo date={p.opened_at} /></td>
+                <td className="py-2.5 px-3 text-center">
+                  {p.ask_close ? (
+                    <span className="inline-flex items-center gap-1 text-[11px] text-warning font-medium">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full bg-warning animate-pulse" />
+                      Pending
+                    </span>
+                  ) : (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        requestClose(p.id);
+                      }}
+                      disabled={closing.has(p.id)}
+                      className="px-2.5 py-1 text-[11px] font-medium rounded bg-loss/10 text-loss hover:bg-loss/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {closing.has(p.id) ? "..." : "Close"}
+                    </button>
+                  )}
+                </td>
               </tr>
               {expanded.has(p.id) && (
                 <tr>
-                  <td colSpan={11} className="p-3">
+                  <td colSpan={12} className="p-3">
                     <PositionDetail position={p} />
                   </td>
                 </tr>

@@ -46,6 +46,7 @@ export interface Position {
   max_price_seen: number | null;
   trailing_sl: number | null;
   original_sl: number | null;
+  ask_close: number;
 }
 
 export interface Coin {

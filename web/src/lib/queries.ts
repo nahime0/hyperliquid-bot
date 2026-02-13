@@ -1,4 +1,4 @@
-import { getDb } from "./db";
+import { getDb, getWriteDb } from "./db";
 import type {
   Trade,
   BalanceSnapshot,
@@ -37,6 +37,13 @@ export function getPositionsBySymbol(symbol: string): Position[] {
   return getDb()
     .prepare("SELECT * FROM positions WHERE symbol = ? ORDER BY id DESC")
     .all(symbol) as Position[];
+}
+
+export function setAskClose(positionId: number): boolean {
+  const result = getWriteDb()
+    .prepare("UPDATE positions SET ask_close = 1 WHERE id = ? AND status = 'OPEN'")
+    .run(positionId);
+  return result.changes > 0;
 }
 
 // ── Trades ─────────────────────────────────────────────────
