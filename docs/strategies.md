@@ -12,12 +12,13 @@ Il bot live utilizza un **MultiStrategy aggregator** che combina decisioni indip
 |---|---|---|---|
 | **Mean Reversion** | 15m | `MeanReversionStrategy` | `--strategy mean_reversion` |
 | **RSI Divergence** | 5m | `RSIDivergenceStrategy` | `--strategy rsi_div` |
-| **Multi (default)** | 5m + 15m | `MultiStrategy` | `--strategy multi` |
+| **Trend Following** | 1h | `TrendFollowingStrategy` | `--strategy trend_following` |
+| **Multi (default)** | 5m + 15m + 1h | `MultiStrategy` | `--strategy multi` |
 
 Il `MultiStrategy` merger:
 - Raccoglie Decision da ciascuna sub-strategia indipendentemente
 - Se 2+ strategie concordano su BUY/SHORT per lo stesso coin → boost confidence (+0.1)
-- Se strategie in conflitto (BUY vs SHORT sullo stesso coin) → skip coin
+- Se strategie in conflitto (BUY vs SHORT sullo stesso coin) → il segnale con **score piu' alto** vince, con nota `[Conflict: ...]` nel reasoning per l'AI
 - Se solo 1 strategia segnala → usa confidence originale
 - Mai piu' di `max_open_positions` entry per ciclo
 
@@ -287,6 +288,79 @@ Identifica divergenze tra prezzo e RSI (swing detection). Una divergenza bullish
 - **Live** (`strategies/rsi_divergence.py`): `RSIDivergenceStrategy(Strategy)` — opera su candele 5m in real-time via WebSocket
 - **Backtest** (`data/backtest.py`): `RSIDivergenceRule(TradingRule)` — stessa logica su dati storici
 - **Parameter sweep**: `.venv/bin/python -m scripts.backtest_runner --sweep --strategy rsi_div`
+
+---
+
+## Trend Following (`trend_following`) — LIVE
+
+### Filosofia
+
+Cattura movimenti direzionali forti. Complementare a Mean Reversion: MR cerca rimbalzi (counter-trend), TF segue il trend (trend-following). In un downtrend forte (BTC -3.5%), MR non puo' shortare (RSI non raggiunge livelli overbought), ma TF si'.
+
+### Indicatori
+
+| Indicatore | Timeframe | Parametri | Utilizzo |
+|---|---|---|---|
+| Price change 4h | 1h (4 candele) | Threshold 3% | Entry trigger principale |
+| EMA50 / EMA200 | 1h | TrendFilter | Trend 1h |
+| EMA12 / EMA26 | 1h | Slope 5 barre | Trend 4h |
+| Volume SMA | 1h | Periodo 20 | Conferma volume |
+
+### Scoring SHORT Entry
+
+| Componente | Peso | Condizione |
+|---|---|---|
+| Variazione 4h | +0.30 | change_4h < -3% |
+| Trend 1h BEARISH | +0.20 | EMA50 < EMA200, price < EMA50, slope < 0 |
+| Trend 4h BEARISH | +0.20 | EMA12 < EMA26, price < EMA12, slope < 0 |
+| Volume ratio | +0.10 | volume_ratio >= 1.0 |
+| Funding rate ok | +0.10 | \|funding\| < 0.05% |
+| No cooldown | +0.10 | Nessun cooldown attivo |
+
+Threshold >= 0.50. I 3 criteri principali (change + trend_1h + trend_4h) = 0.70.
+
+### Scoring LONG Entry (specchiato)
+
+change_4h > +3%, trend BULLISH su 1h e 4h.
+
+### Hard Blocks
+
+Identici a Mean Reversion:
+- \|funding\| >= 0.001 (extreme funding)
+- Global cooldown attivo
+- Cooldown fresco < 10 min
+
+### Exit
+
+- SHORT exit: trend_1h diventa BULLISH **oppure** trend_4h diventa BULLISH
+- LONG exit: trend_1h diventa BEARISH **oppure** trend_4h diventa BEARISH
+
+### Parametri configurabili (`.env`)
+
+| Variabile | Default | Descrizione |
+|---|---|---|
+| `TF_CHANGE_THRESHOLD` | 3.0 | % minima di variazione 4h per trigger |
+
+### 4h data senza WebSocket aggiuntivo
+
+Il 4h change e il 4h trend vengono calcolati dalle candele 1h gia' disponibili:
+- `change_4h = (close[-1] - close[-5]) / close[-5] * 100`
+- `trend_4h` = EMA12/EMA26 su 1h close (stessa logica di `_get_market_context`)
+
+---
+
+## Gestione Conflitti Multi-Strategy
+
+Quando strategie diverse generano segnali opposti sullo stesso coin:
+
+| Scenario | Comportamento |
+|---|---|
+| MR BUY + TF SHORT (score piu' alto) | TF SHORT va all'AI con nota conflitto |
+| MR BUY (score piu' alto) + TF SHORT | MR BUY va all'AI con nota conflitto |
+| MR SHORT + TF SHORT (concordano) | Boost +0.10 sulla confidence migliore |
+| Solo una strategia segnala | Nessun cambiamento |
+
+L'AI riceve la nota `[Conflict: trend_following SHORT wins over mean_reversion BUY (0.55)]` e valuta se il trend continuera' o il rimbalzo e' piu' probabile.
 
 ---
 
