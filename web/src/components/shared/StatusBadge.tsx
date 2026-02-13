@@ -5,6 +5,8 @@ const STYLES: Record<string, string> = {
   PARTIALLY_FILLED: "bg-warning/10 text-warning border-warning/20",
   FILLED: "bg-profit/10 text-profit border-profit/20",
   CANCELED: "bg-text-muted/10 text-text-muted border-text-muted/20",
+  flip: "bg-warning/10 text-warning border-warning/20",
+  manual_close: "bg-warning/10 text-warning border-warning/20",
 };
 
 export function StatusBadge({ status }: { status: string }) {

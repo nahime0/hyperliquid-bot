@@ -96,7 +96,7 @@ export interface AiDecision {
   id: number;
   timestamp: string;
   snapshot_hash: string | null;
-  action: "BUY" | "SHORT" | "SELL" | "HOLD" | "CLOSE" | "SCALE_UP" | "ADJUST";
+  action: "BUY" | "SHORT" | "SELL" | "HOLD" | "CLOSE" | "SCALE_UP" | "ADJUST" | "FLIP";
   symbol: string;
   confidence: number;
   reasoning: string | null;
@@ -130,6 +130,8 @@ export interface DeferredOpportunity {
   deferred_at_cycle: number;
   conditions: string | null;
   type: "opportunity" | "hold";
+  strategy_type: string;
+  confidence: number;
   created_at: string;
 }
 

@@ -16,6 +16,7 @@ const ACTION_COLORS: Record<string, string> = {
   CLOSE: "bg-loss/10 text-loss border-loss/20",
   SCALE_UP: "bg-accent/10 text-accent border-accent/20",
   ADJUST: "bg-purple/10 text-purple border-purple/20",
+  FLIP: "bg-warning/10 text-warning border-warning/20",
 };
 
 function ActionBadge({ action }: { action: string }) {

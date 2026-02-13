@@ -10,6 +10,8 @@ const COLORS: Record<string, string> = {
   TRAILING_UPDATE: "bg-warning/10 text-warning border-warning/20",
   SL_TP_TRIGGER: "bg-loss/10 text-loss border-loss/20",
   POSITION_ADJUSTED: "bg-purple/10 text-purple border-purple/20",
+  MANUAL_CLOSE: "bg-warning/10 text-warning border-warning/20",
+  PARTIAL_TP: "bg-accent/10 text-accent border-accent/20",
 };
 
 const LABELS: Record<string, string> = {
@@ -24,6 +26,8 @@ const LABELS: Record<string, string> = {
   TRAILING_UPDATE: "Trail Update",
   SL_TP_TRIGGER: "SL/TP Hit",
   POSITION_ADJUSTED: "Adjusted",
+  MANUAL_CLOSE: "Manual Close",
+  PARTIAL_TP: "Partial TP",
 };
 
 export function EventTypeBadge({ type }: { type: string }) {
