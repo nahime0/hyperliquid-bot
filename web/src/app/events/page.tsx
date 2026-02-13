@@ -12,7 +12,7 @@ import { Pagination } from "@/components/shared/Pagination";
 const EVENT_TYPES = [
   "SIGNAL", "AI_REVIEW", "DEFERRED", "RISK_APPROVED", "RISK_BLOCKED",
   "TRADE_ENTRY", "TRADE_EXIT", "POSITION_SCALED", "TRAILING_UPDATE",
-  "SL_TP_TRIGGER", "POSITION_ADJUSTED",
+  "SL_TP_TRIGGER", "POSITION_ADJUSTED", "MANUAL_CLOSE", "PARTIAL_TP",
 ] as const;
 
 function parseDetails(details: string): Record<string, unknown> | null {
@@ -37,7 +37,7 @@ const SCORE_OPTIONS = [
 export default function EventsPage() {
   const [eventType, setEventType] = useState("");
   const [symbol, setSymbol] = useState("");
-  const [minScore, setMinScore] = useState(50);
+  const [minScore, setMinScore] = useState(70);
   const [page, setPage] = useState(0);
   const limit = 50;
 
@@ -115,9 +115,9 @@ export default function EventsPage() {
             {filteredCount} signal{filteredCount !== 1 ? "s" : ""} hidden
           </span>
         )}
-        {(eventType || symbol || minScore !== 50) && (
+        {(eventType || symbol || minScore !== 70) && (
           <button
-            onClick={() => { setEventType(""); setSymbol(""); setMinScore(50); setPage(0); }}
+            onClick={() => { setEventType(""); setSymbol(""); setMinScore(70); setPage(0); }}
             className="text-xs text-text-muted hover:text-accent transition-colors"
           >
             Reset filters
