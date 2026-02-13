@@ -12,6 +12,13 @@ import { Pagination } from "@/components/shared/Pagination";
 import { formatPrice, formatDuration, formatUsd, parseTimestamp } from "@/lib/format";
 import type { Position } from "@/lib/types";
 
+/** Returns "text-profit" or "text-loss" based on whether closing at `price` would be profitable. */
+function slColor(direction: string, entryPrice: number, price: number | null): string {
+  if (price == null) return "text-text-muted";
+  if (direction === "LONG") return price >= entryPrice ? "text-profit" : "text-loss";
+  return price <= entryPrice ? "text-profit" : "text-loss";
+}
+
 function PositionDetail({ position: p }: { position: Position }) {
   return (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-bg-secondary rounded-lg border border-border-light text-xs">
@@ -25,7 +32,7 @@ function PositionDetail({ position: p }: { position: Position }) {
       </div>
       <div>
         <span className="text-text-muted block mb-0.5">Stop Loss</span>
-        <span className="font-mono font-medium text-text-primary">{p.stop_loss ? formatPrice(p.stop_loss) : "—"}</span>
+        <span className={`font-mono font-medium ${slColor(p.direction, p.entry_price, p.stop_loss)}`}>{p.stop_loss ? formatPrice(p.stop_loss) : "—"}</span>
         {p.original_sl && p.original_sl !== p.stop_loss && (
           <span className="text-text-muted block">orig: {formatPrice(p.original_sl)}</span>
         )}
@@ -36,7 +43,7 @@ function PositionDetail({ position: p }: { position: Position }) {
       </div>
       <div>
         <span className="text-text-muted block mb-0.5">Trailing SL</span>
-        <span className="font-mono font-medium text-warning">{p.trailing_sl ? formatPrice(p.trailing_sl) : "—"}</span>
+        <span className={`font-mono font-medium ${slColor(p.direction, p.entry_price, p.trailing_sl)}`}>{p.trailing_sl ? formatPrice(p.trailing_sl) : "—"}</span>
       </div>
       <div>
         <span className="text-text-muted block mb-0.5">Liquidation</span>
@@ -147,9 +154,9 @@ function OpenTab() {
                 <td className="py-2.5 px-2"><DirectionBadge direction={p.direction} /></td>
                 <td className="py-2.5 px-2 text-right font-mono text-text-secondary">{formatPrice(p.entry_price)}</td>
                 <td className="py-2.5 px-2 text-right font-mono text-text-secondary">{p.quantity.toFixed(4)}</td>
-                <td className="py-2.5 px-2 text-right font-mono text-text-muted">{p.stop_loss ? formatPrice(p.stop_loss) : "—"}</td>
+                <td className={`py-2.5 px-2 text-right font-mono ${slColor(p.direction, p.entry_price, p.stop_loss)}`}>{p.stop_loss ? formatPrice(p.stop_loss) : "—"}</td>
                 <td className="py-2.5 px-2 text-right font-mono text-text-muted">{p.take_profit ? formatPrice(p.take_profit) : "—"}</td>
-                <td className="py-2.5 px-2 text-right font-mono text-warning">{p.trailing_sl ? formatPrice(p.trailing_sl) : "—"}</td>
+                <td className={`py-2.5 px-2 text-right font-mono ${slColor(p.direction, p.entry_price, p.trailing_sl)}`}>{p.trailing_sl ? formatPrice(p.trailing_sl) : "—"}</td>
                 <td className="py-2.5 px-2 text-right"><span className="text-accent font-medium">{p.leverage}x</span></td>
                 <td className="py-2.5 px-2 text-text-muted text-xs">{p.strategy}</td>
                 <td className="py-2.5 px-2 text-right"><TimeAgo date={p.opened_at} /></td>
