@@ -7,8 +7,9 @@ from config.settings import AIConfig, MarketConfig, RiskConfig, Settings, Strate
 class TestAIConfig:
     def test_defaults(self):
         c = AIConfig()
+        assert c.advisor == "claude"
         assert c.model == "opus"
-        assert c.timeout == 120
+        assert c.timeout == 180
         assert c.decision_interval == 60
         assert c.min_confidence == 0.6
         assert c.fallback_on_error == "HOLD"
@@ -29,7 +30,7 @@ class TestRiskConfig:
     def test_defaults(self):
         c = RiskConfig()
         assert c.max_trade_pct == 15.0
-        assert c.stop_loss_pct == 1.0
+        assert c.stop_loss_pct == 1.5
         assert c.take_profit_pct == 1.5
         assert c.max_daily_drawdown_pct == 5.0
         assert c.max_total_drawdown_pct == 15.0
@@ -46,6 +47,25 @@ class TestRiskConfig:
         assert c.trailing_tight_pct == 2.5
         assert c.trailing_tight_distance_pct == 0.75
         assert c.time_stop_hours == 4.0
+        # ATR-based stop loss
+        assert c.use_atr_sl is True
+        assert c.atr_sl_multiplier == 2.0
+        assert c.atr_sl_min_pct == 0.5
+        assert c.atr_sl_max_pct == 3.0
+        # Risk-based sizing
+        assert c.risk_per_trade_pct == 1.0
+        # Partial TP
+        assert c.partial_tp_enabled is True
+        assert c.partial_tp_pct == 50.0
+        assert c.partial_tp_trigger_pct == 1.0
+        # R:R gate
+        assert c.min_rr_ratio == 1.5
+        # ATR trailing
+        assert c.use_atr_trailing is True
+        assert c.atr_trailing_multiplier == 1.5
+        assert c.atr_trailing_tight_multiplier == 1.0
+        assert c.atr_trailing_min_pct == 0.5
+        assert c.atr_trailing_max_pct == 3.0
 
     def test_frozen(self):
         c = RiskConfig()
@@ -92,6 +112,6 @@ class TestSettings:
         assert isinstance(s.risk, RiskConfig)
         assert isinstance(s.market, MarketConfig)
         assert isinstance(s.strategy, StrategyConfig)
-        assert s.ai.model in ("opus", "haiku", "sonnet")  # from env or default
+        assert isinstance(s.ai.model, str) and len(s.ai.model) > 0  # from env or default
         assert s.market.max_spread_pct == 0.5
         assert s.strategy.min_candle_volume_usdc == 10_000.0

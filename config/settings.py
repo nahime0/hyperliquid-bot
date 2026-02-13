@@ -35,18 +35,19 @@ class HyperliquidConfig:
 
 @dataclass(frozen=True)
 class AIConfig:
+    advisor: str = "claude"  # "claude" or "cursor"
     decision_interval: int = 60
     min_confidence: float = 0.6
     fallback_on_error: str = "HOLD"
     log_reasoning: bool = True
     model: str = "opus"
-    timeout: int = 120
+    timeout: int = 180
 
 
 @dataclass(frozen=True)
 class RiskConfig:
     max_trade_pct: float = 15.0
-    stop_loss_pct: float = 1.0
+    stop_loss_pct: float = 1.5
     take_profit_pct: float = 1.5
     auto_take_profit: bool = False  # False → no auto-TP, rely on trailing stop
     max_daily_drawdown_pct: float = 5.0
@@ -61,6 +62,8 @@ class RiskConfig:
     min_holding_minutes: int = 15  # minimum time before AI can close a position
     max_leverage: int = 3
     liquidation_buffer_pct: float = 5.0
+    # Grace period: skip SL/TP check for newly opened positions
+    sl_tp_grace_seconds: int = 30
     # Trailing stop
     trailing_breakeven_pct: float = 1.0   # move SL to entry after +X%
     trailing_start_pct: float = 1.5       # start trailing after +X%
@@ -74,6 +77,25 @@ class RiskConfig:
     symbol_cooldown_sec: int = 1800       # per-symbol cooldown after loss (30 min)
     global_cooldown_sec: int = 900        # global cooldown after N consecutive losses (15 min)
     global_cooldown_losses: int = 3       # trigger global cooldown after N losses
+    # ATR-based stop loss
+    use_atr_sl: bool = True               # use ATR to compute per-coin stop loss
+    atr_sl_multiplier: float = 2.0        # SL = price +/- (multiplier * ATR)
+    atr_sl_min_pct: float = 0.5           # floor: never tighter than 0.5%
+    atr_sl_max_pct: float = 3.0           # ceiling: never wider than 3.0%
+    # Risk-based position sizing
+    risk_per_trade_pct: float = 1.0       # max % of bankroll to risk per trade
+    # Partial take profit
+    partial_tp_enabled: bool = True       # auto-close partial at trigger
+    partial_tp_pct: float = 50.0          # % of position to close
+    partial_tp_trigger_pct: float = 1.0   # trigger when gain >= +1%
+    # R:R gate (only when TP is set)
+    min_rr_ratio: float = 1.5            # min reward/risk ratio for entries
+    # ATR-based trailing distance
+    use_atr_trailing: bool = True
+    atr_trailing_multiplier: float = 1.5       # normal trail = ATR * multiplier
+    atr_trailing_tight_multiplier: float = 1.0 # tight trail = ATR * multiplier
+    atr_trailing_min_pct: float = 0.5          # floor for ATR trailing %
+    atr_trailing_max_pct: float = 3.0          # ceiling for ATR trailing %
 
 
 @dataclass(frozen=True)
@@ -86,8 +108,9 @@ class MarketConfig:
 
 @dataclass(frozen=True)
 class StrategyConfig:
-    active_strategies: tuple[str, ...] = ("mean_reversion", "rsi_divergence")
+    active_strategies: tuple[str, ...] = ("mean_reversion", "rsi_divergence", "trend_following")
     rsi_div_period: int = 14
+    tf_change_threshold: float = 4.0  # % price change over 4h to fire trend signal
     rsi_div_swing_window: int = 5       # wider window to catch more divergences (was 4)
     rsi_div_long_exit: float = 55.0     # optimized: le=55 in 50% of top 30
     rsi_div_short_exit: float = 35.0    # optimized: se=35 in 73% of top 30
@@ -132,16 +155,17 @@ def load_settings() -> Settings:
             max_funding_rate=float(os.getenv("HL_MAX_FUNDING_RATE", "0.0005")),
         ),
         ai=AIConfig(
+            advisor=os.getenv("AI_ADVISOR", "claude"),
             decision_interval=int(os.getenv("AI_DECISION_INTERVAL", "60")),
             min_confidence=float(os.getenv("AI_MIN_CONFIDENCE", "0.6")),
             fallback_on_error=os.getenv("AI_FALLBACK_ON_ERROR", "HOLD"),
             log_reasoning=_bool(os.getenv("AI_LOG_REASONING"), default=True),
             model=os.getenv("AI_MODEL", "opus"),
-            timeout=int(os.getenv("AI_TIMEOUT", "120")),
+            timeout=int(os.getenv("AI_TIMEOUT", "180")),
         ),
         risk=RiskConfig(
             max_trade_pct=float(os.getenv("MAX_TRADE_PCT", "15")),
-            stop_loss_pct=float(os.getenv("STOP_LOSS_PCT", "1.0")),
+            stop_loss_pct=float(os.getenv("STOP_LOSS_PCT", "1.5")),
             take_profit_pct=float(os.getenv("TAKE_PROFIT_PCT", "1.5")),
             auto_take_profit=_bool(os.getenv("AUTO_TAKE_PROFIT"), default=False),
             max_daily_drawdown_pct=float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", "5.0")),
@@ -163,6 +187,20 @@ def load_settings() -> Settings:
             symbol_cooldown_sec=int(os.getenv("SYMBOL_COOLDOWN_SEC", "1800")),
             global_cooldown_sec=int(os.getenv("GLOBAL_COOLDOWN_SEC", "900")),
             global_cooldown_losses=int(os.getenv("GLOBAL_COOLDOWN_LOSSES", "3")),
+            use_atr_sl=_bool(os.getenv("USE_ATR_SL"), default=True),
+            atr_sl_multiplier=float(os.getenv("ATR_SL_MULTIPLIER", "2.0")),
+            atr_sl_min_pct=float(os.getenv("ATR_SL_MIN_PCT", "0.5")),
+            atr_sl_max_pct=float(os.getenv("ATR_SL_MAX_PCT", "3.0")),
+            risk_per_trade_pct=float(os.getenv("RISK_PER_TRADE_PCT", "1.0")),
+            partial_tp_enabled=_bool(os.getenv("PARTIAL_TP_ENABLED"), default=True),
+            partial_tp_pct=float(os.getenv("PARTIAL_TP_PCT", "50.0")),
+            partial_tp_trigger_pct=float(os.getenv("PARTIAL_TP_TRIGGER_PCT", "1.0")),
+            min_rr_ratio=float(os.getenv("MIN_RR_RATIO", "1.5")),
+            use_atr_trailing=_bool(os.getenv("USE_ATR_TRAILING"), default=True),
+            atr_trailing_multiplier=float(os.getenv("ATR_TRAILING_MULTIPLIER", "1.5")),
+            atr_trailing_tight_multiplier=float(os.getenv("ATR_TRAILING_TIGHT_MULTIPLIER", "1.0")),
+            atr_trailing_min_pct=float(os.getenv("ATR_TRAILING_MIN_PCT", "0.5")),
+            atr_trailing_max_pct=float(os.getenv("ATR_TRAILING_MAX_PCT", "3.0")),
         ),
         market=MarketConfig(
             min_pair_volume=float(os.getenv("MIN_PAIR_VOLUME", "50000")),
@@ -171,7 +209,7 @@ def load_settings() -> Settings:
         ),
         strategy=StrategyConfig(
             active_strategies=tuple(
-                os.getenv("ACTIVE_STRATEGIES", "mean_reversion,rsi_divergence").split(",")
+                os.getenv("ACTIVE_STRATEGIES", "mean_reversion,rsi_divergence,trend_following").split(",")
             ),
             rsi_div_period=int(os.getenv("RSI_DIV_PERIOD", "14")),
             rsi_div_swing_window=int(os.getenv("RSI_DIV_SWING_WINDOW", "5")),
@@ -181,6 +219,7 @@ def load_settings() -> Settings:
             primary_interval=os.getenv("PRIMARY_INTERVAL", "5m"),
             mr_interval=os.getenv("MR_INTERVAL", "15m"),
             trend_interval=os.getenv("TREND_INTERVAL", "1h"),
+            tf_change_threshold=float(os.getenv("TF_CHANGE_THRESHOLD", "4.0")),
         ),
         telegram=TelegramConfig(
             bot_token=os.getenv("TELEGRAM_BOT_TOKEN", ""),

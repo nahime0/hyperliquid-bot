@@ -61,6 +61,7 @@ class PositionSizer:
         ai_confidence: float,
         ai_size_pct: float | None = None,
         utilization_boost: float = 1.0,
+        sl_distance_pct: float | None = None,
     ) -> SizeResult:
         """Return how much USDC to allocate for this trade.
 
@@ -94,6 +95,14 @@ class PositionSizer:
             # AI hint as soft cap
             if ai_size_pct is not None and ai_size_pct > 0:
                 size_pct = min(size_pct, ai_size_pct)
+
+            # Risk-based cap: ensure each trade risks at most risk_per_trade_pct
+            if sl_distance_pct is not None and sl_distance_pct > 0 and bankroll > 0:
+                risk_budget = bankroll * self._config.risk_per_trade_pct / 100
+                risk_cap_usdc = risk_budget / (sl_distance_pct / 100)
+                risk_cap_pct = (risk_cap_usdc / bankroll) * 100
+                if size_pct > risk_cap_pct:
+                    size_pct = risk_cap_pct
 
             # Hard cap
             capped = False
@@ -153,6 +162,15 @@ class PositionSizer:
         # If the AI suggested a size, use the minimum of Kelly and AI
         if ai_size_pct is not None and ai_size_pct > 0:
             size_pct = min(size_pct, ai_size_pct)
+
+        # Risk-based cap: ensure each trade risks at most risk_per_trade_pct
+        if sl_distance_pct is not None and sl_distance_pct > 0 and bankroll > 0:
+            risk_budget = bankroll * self._config.risk_per_trade_pct / 100
+            risk_cap_usdc = risk_budget / (sl_distance_pct / 100)
+            risk_cap_pct = (risk_cap_usdc / bankroll) * 100
+            if size_pct > risk_cap_pct:
+                size_pct = risk_cap_pct
+                capped = True
 
         # Hard cap from config
         if size_pct > max_pct:

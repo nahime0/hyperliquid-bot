@@ -13,8 +13,12 @@ Phase 11 additions:
 """
 from __future__ import annotations
 
+import time
 from datetime import datetime, timezone
 from typing import Any
+
+import pandas as pd
+import ta as ta_lib
 
 from config.settings import RiskConfig
 from data.db import Database
@@ -29,9 +33,11 @@ FEE_PER_LEG = 0.00045
 class PositionTracker:
     """Tracks open positions with entry price, stop loss, take profit."""
 
-    def __init__(self, db: Database, risk_config: RiskConfig | None = None) -> None:
+    def __init__(self, db: Database, risk_config: RiskConfig | None = None, market_data: Any = None) -> None:
         self._db = db
         self._rc = risk_config
+        self._market_data = market_data
+        self._atr_cache: dict[str, tuple[float, float, float]] = {}  # symbol → (timestamp, trail_pct, tight_pct)
         self._cycle_count: int = 0
 
     def set_cycle(self, cycle: int) -> None:
@@ -69,9 +75,9 @@ class PositionTracker:
         )
         await self._db.db.commit()
         pos_id = cursor.lastrowid
-        tp_str = f"{take_profit:.4f}" if take_profit else "None"
+        tp_str = f"{take_profit:g}" if take_profit else "None"
         logger.info(
-            "Position opened #%d: %s %s qty=%.6f @ %.4f SL=%.4f TP=%s lev=%dx",
+            "Position opened #%d: %s %s qty=%.6f @ %g SL=%g TP=%s lev=%dx",
             pos_id, direction, symbol, quantity, entry_price,
             stop_loss or 0, tp_str, leverage,
         )
@@ -110,7 +116,7 @@ class PositionTracker:
         await self._db.db.commit()
 
         logger.info(
-            "Position closed #%d: %s %s @ %.4f PnL=%.4f (%s)",
+            "Position closed #%d: %s %s @ %g PnL=%.4f (%s)",
             position_id, direction, pos["symbol"], exit_price, pnl_net, reason,
         )
         return pnl_net
@@ -133,6 +139,31 @@ class PositionTracker:
 
             direction = pos.get("direction", "LONG")
 
+            # Grace period: skip recently opened positions
+            grace = self._rc.sl_tp_grace_seconds if self._rc else 30
+            if grace > 0:
+                opened_at = pos.get("opened_at")
+                if opened_at:
+                    opened = datetime.fromisoformat(opened_at.replace("Z", "+00:00"))
+                    age_seconds = (datetime.now(timezone.utc) - opened).total_seconds()
+                    if age_seconds < grace:
+                        continue
+
+            # Partial take profit check (before trailing update)
+            if self._rc and self._rc.partial_tp_enabled and not pos.get("partial_closed"):
+                entry = pos["entry_price"]
+                if direction == "LONG":
+                    gain_pct = (price - entry) / entry * 100 if entry > 0 else 0
+                else:
+                    gain_pct = (entry - price) / entry * 100 if entry > 0 else 0
+                if gain_pct >= self._rc.partial_tp_trigger_pct:
+                    to_close.append({
+                        "position": pos,
+                        "action": "PARTIAL_CLOSE",
+                        "reason": f"partial_tp ({gain_pct:.2f}% >= {self._rc.partial_tp_trigger_pct}%)",
+                    })
+                    continue  # skip full SL/TP check this cycle
+
             # Update trailing stop
             await self._update_trailing_stop(pos, price)
 
@@ -149,12 +180,12 @@ class PositionTracker:
                     sl_triggered = True
 
                 if sl_triggered:
-                    reason = f"stop_loss ({price:.4f} {'<=' if direction == 'LONG' else '>='} {effective_sl:.4f})"
+                    reason = f"stop_loss ({price:g} {'<=' if direction == 'LONG' else '>='} {effective_sl:g})"
                     if pos.get("trailing_sl") and pos.get("original_sl"):
                         if direction == "LONG" and pos["trailing_sl"] > pos["original_sl"]:
-                            reason = f"trailing_sl ({price:.4f} <= {pos['trailing_sl']:.4f})"
+                            reason = f"trailing_sl ({price:g} <= {pos['trailing_sl']:g})"
                         elif direction == "SHORT" and pos["trailing_sl"] < pos["original_sl"]:
-                            reason = f"trailing_sl ({price:.4f} >= {pos['trailing_sl']:.4f})"
+                            reason = f"trailing_sl ({price:g} >= {pos['trailing_sl']:g})"
                     to_close.append({
                         "position": pos,
                         "action": "CLOSE",
@@ -174,7 +205,7 @@ class PositionTracker:
                     to_close.append({
                         "position": pos,
                         "action": "CLOSE",
-                        "reason": f"take_profit ({price:.4f} {'<=' if direction == 'SHORT' else '>='} {pos['take_profit']:.4f})",
+                        "reason": f"take_profit ({price:g} {'<=' if direction == 'SHORT' else '>='} {pos['take_profit']:g})",
                     })
                     continue
 
@@ -211,12 +242,17 @@ class PositionTracker:
         new_max = max(max_seen, current_price)
         gain_pct = (new_max - entry) / entry * 100 if entry > 0 else 0
 
+        # ATR-based trailing distances with fixed % fallback
+        atr = self._get_atr_trailing_distance(pos["symbol"], current_price)
+        trail_pct = atr[0] if atr else self._rc.trailing_distance_pct
+        tight_pct = atr[1] if atr else self._rc.trailing_tight_distance_pct
+
         new_trailing = old_trailing
 
         if gain_pct >= self._rc.trailing_tight_pct:
-            new_trailing = new_max * (1 - self._rc.trailing_tight_distance_pct / 100)
+            new_trailing = new_max * (1 - tight_pct / 100)
         elif gain_pct >= self._rc.trailing_start_pct:
-            new_trailing = new_max * (1 - self._rc.trailing_distance_pct / 100)
+            new_trailing = new_max * (1 - trail_pct / 100)
         elif gain_pct >= self._rc.trailing_breakeven_pct:
             new_trailing = entry
 
@@ -232,7 +268,7 @@ class PositionTracker:
 
             if new_trailing > old_trailing:
                 logger.info(
-                    "Trailing SL updated #%d %s LONG: %.4f → %.4f (gain=%.2f%%, max=%.4f)",
+                    "Trailing SL updated #%d %s LONG: %g → %g (gain=%.2f%%, max=%g)",
                     pos["id"], pos["symbol"], old_trailing, new_trailing, gain_pct, new_max,
                 )
                 if self._cycle_count > 0:
@@ -262,12 +298,17 @@ class PositionTracker:
         new_min = min(min_seen, current_price)
         gain_pct = (entry - new_min) / entry * 100 if entry > 0 else 0
 
+        # ATR-based trailing distances with fixed % fallback
+        atr = self._get_atr_trailing_distance(pos["symbol"], current_price)
+        trail_pct = atr[0] if atr else self._rc.trailing_distance_pct
+        tight_pct = atr[1] if atr else self._rc.trailing_tight_distance_pct
+
         new_trailing = old_trailing
 
         if gain_pct >= self._rc.trailing_tight_pct:
-            new_trailing = new_min * (1 + self._rc.trailing_tight_distance_pct / 100)
+            new_trailing = new_min * (1 + tight_pct / 100)
         elif gain_pct >= self._rc.trailing_start_pct:
-            new_trailing = new_min * (1 + self._rc.trailing_distance_pct / 100)
+            new_trailing = new_min * (1 + trail_pct / 100)
         elif gain_pct >= self._rc.trailing_breakeven_pct:
             new_trailing = entry
 
@@ -283,7 +324,7 @@ class PositionTracker:
 
             if new_trailing < old_trailing:
                 logger.info(
-                    "Trailing SL updated #%d %s SHORT: %.4f → %.4f (gain=%.2f%%, min=%.4f)",
+                    "Trailing SL updated #%d %s SHORT: %g → %g (gain=%.2f%%, min=%g)",
                     pos["id"], pos["symbol"], old_trailing, new_trailing, gain_pct, new_min,
                 )
                 if self._cycle_count > 0:
@@ -363,10 +404,128 @@ class PositionTracker:
         await self._db.db.commit()
 
         logger.info(
-            "Position scaled #%d %s: qty %.6f→%.6f, entry %.4f→%.4f (added %.6f @ %.4f)",
+            "Position scaled #%d %s: qty %.6f→%.6f, entry %g→%g (added %.6f @ %g)",
             position_id, pos["symbol"], old_qty, new_qty, old_entry, new_entry,
             additional_qty, fill_price,
         )
+
+    async def partial_close(
+        self,
+        position_id: int,
+        close_pct: float,
+        exit_price: float,
+        reason: str = "partial_tp",
+    ) -> tuple[float, float, int]:
+        """Partially close a position.
+
+        1. Close original position with PnL on closed portion
+        2. Open new position for remaining quantity (breakeven SL)
+
+        Returns (pnl_net, closed_qty, new_position_id).
+        """
+        pos = await self._get_by_id(position_id)
+        if not pos:
+            raise ValueError(f"Position #{position_id} not found")
+        if pos["status"] != "OPEN":
+            raise ValueError(f"Position #{position_id} is not OPEN")
+
+        direction = pos.get("direction", "LONG")
+        entry = pos["entry_price"]
+        total_qty = pos["quantity"]
+        closed_qty = round(total_qty * close_pct / 100, 8)
+        remaining_qty = round(total_qty - closed_qty, 8)
+
+        if remaining_qty <= 0 or closed_qty <= 0:
+            raise ValueError(f"Invalid partial close: closed={closed_qty}, remaining={remaining_qty}")
+
+        # PnL on closed portion (direction-aware)
+        if direction == "LONG":
+            pnl = (exit_price - entry) * closed_qty
+        else:
+            pnl = (entry - exit_price) * closed_qty
+        fee_estimate = (entry + exit_price) * closed_qty * FEE_PER_LEG
+        pnl_net = pnl - fee_estimate
+
+        # 1. Close original position
+        await self._db.db.execute(
+            """UPDATE positions SET status='CLOSED', exit_price=?, pnl=?,
+               close_reason=?, closed_at=strftime('%Y-%m-%dT%H:%M:%SZ','now')
+               WHERE id=?""",
+            (exit_price, pnl_net, reason, position_id),
+        )
+        await self._db.db.commit()
+
+        # 2. Open new position for remaining (raw INSERT — original is already CLOSED)
+        cursor = await self._db.db.execute(
+            """INSERT INTO positions
+               (symbol, entry_price, quantity, stop_loss, take_profit, strategy,
+                max_price_seen, min_price_seen, original_sl, trailing_sl,
+                direction, leverage, partial_closed)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)""",
+            (
+                pos["symbol"], entry, remaining_qty,
+                entry,  # breakeven SL
+                None,   # no TP — let trailing handle it
+                pos.get("strategy", "ai"),
+                pos.get("max_price_seen") or entry,
+                pos.get("min_price_seen") or entry,
+                entry,  # original_sl = breakeven
+                entry,  # trailing_sl = breakeven
+                direction,
+                pos.get("leverage", 1),
+            ),
+        )
+        await self._db.db.commit()
+        new_id = cursor.lastrowid
+
+        logger.info(
+            "Partial close #%d %s %s: closed %.6f @ %g PnL=%.4f, remaining %.6f → #%d (breakeven SL)",
+            position_id, direction, pos["symbol"], closed_qty, exit_price,
+            pnl_net, remaining_qty, new_id,
+        )
+        return (pnl_net, closed_qty, new_id)
+
+    def _get_atr_trailing_distance(self, symbol: str, price: float) -> tuple[float, float] | None:
+        """Compute ATR-based trailing distances for a symbol.
+
+        Returns (trail_pct, tight_pct) or None if unavailable.
+        Uses ATR(14) on 15m candles, cached for 5 minutes.
+        """
+        if not self._rc or not self._rc.use_atr_trailing or not self._market_data:
+            return None
+
+        # Check cache (5 min TTL)
+        now = time.time()
+        cached = self._atr_cache.get(symbol)
+        if cached and (now - cached[0]) < 300:
+            return (cached[1], cached[2])
+
+        df = self._market_data.get_candles(symbol, "15m")
+        if df is None or len(df) < 15:
+            return None
+
+        try:
+            atr = ta_lib.volatility.AverageTrueRange(
+                high=df["high"], low=df["low"], close=df["close"], window=14,
+            ).average_true_range()
+            atr_val = float(atr.iloc[-1])
+            if pd.isna(atr_val) or atr_val <= 0:
+                return None
+        except Exception:
+            return None
+
+        # Normal trail
+        trail_dist = self._rc.atr_trailing_multiplier * atr_val
+        trail_pct = trail_dist / price * 100 if price > 0 else 0
+        trail_pct = max(self._rc.atr_trailing_min_pct, min(trail_pct, self._rc.atr_trailing_max_pct))
+
+        # Tight trail
+        tight_dist = self._rc.atr_trailing_tight_multiplier * atr_val
+        tight_pct = tight_dist / price * 100 if price > 0 else 0
+        tight_pct = max(self._rc.atr_trailing_min_pct, min(tight_pct, self._rc.atr_trailing_max_pct))
+
+        self._atr_cache[symbol] = (now, trail_pct, tight_pct)
+        return (trail_pct, tight_pct)
 
     async def update_sl_tp(
         self,

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock
 
+import numpy as np
+import pandas as pd
 import pytest
 import pytest_asyncio
 
@@ -112,11 +114,11 @@ class TestValidation:
         result = await rm.validate_decision(d_short)
         assert result.approved is False
 
-        # CLOSE allowed
+        # CLOSE allowed (even during daily pause)
         d_close = Decision(action="CLOSE", confidence=0.8, reasoning="exit", symbol="ETH")
         result = await rm.validate_decision(d_close)
-        # CLOSE may be blocked for other reasons (no position), but not daily pause
-        assert "DAILY PAUSE" not in result.reason
+        assert result.approved is True
+        assert result.reason == "approved_close"
 
     @pytest.mark.asyncio
     async def test_validate_max_positions_blocks(self, risk_env):
@@ -187,7 +189,7 @@ class TestValidation:
     @pytest.mark.asyncio
     async def test_validate_auto_sl_tp_long_when_enabled(self, db):
         """With auto_take_profit=True, both SL and TP are generated."""
-        rc = RiskConfig(auto_take_profit=True)
+        rc = RiskConfig(auto_take_profit=True, min_rr_ratio=0)
         client = MockClient(balance=1000.0)
         pt = PositionTracker(db, rc)
         rm = RiskManager(rc, client, db, position_tracker=pt)
@@ -205,7 +207,7 @@ class TestValidation:
     @pytest.mark.asyncio
     async def test_validate_auto_sl_tp_short_when_enabled(self, db):
         """With auto_take_profit=True, SHORT gets SL above and TP below."""
-        rc = RiskConfig(auto_take_profit=True)
+        rc = RiskConfig(auto_take_profit=True, min_rr_ratio=0)
         client = MockClient(balance=1000.0)
         pt = PositionTracker(db, rc)
         rm = RiskManager(rc, client, db, position_tracker=pt)
@@ -219,6 +221,74 @@ class TestValidation:
         assert result.decision.stop_loss > 2000
         assert result.decision.take_profit is not None
         assert result.decision.take_profit < 2000
+
+    @pytest.mark.asyncio
+    async def test_validate_close_approved_no_position(self, risk_env):
+        """CLOSE is approved even without a position (holding period skips)."""
+        rm, pt, _ = risk_env
+        d = Decision(action="CLOSE", confidence=0.8, reasoning="exit", symbol="ETH")
+        result = await rm.validate_decision(d)
+        assert result.approved is True
+        assert result.reason == "approved_close"
+
+    @pytest.mark.asyncio
+    async def test_rr_gate_blocks_bad_rr(self, db):
+        """R:R gate blocks entry when reward/risk < min_rr_ratio."""
+        rc = RiskConfig(min_rr_ratio=1.5, auto_take_profit=True, take_profit_pct=0.5, stop_loss_pct=1.5)
+        client = MockClient(balance=1000.0)
+        pt = PositionTracker(db, rc)
+        rm = RiskManager(rc, client, db, position_tracker=pt)
+        rm._current_balance = 1000.0
+        rm._peak_balance = 1000.0
+        rm._open_position_count = 0
+
+        # TP=0.5% risk=1.5% → R:R = 0.33 < 1.5
+        d = Decision(action="BUY", confidence=0.75, reasoning="signal", symbol="ETH")
+        result = await rm.validate_decision(d)
+        assert result.approved is False
+        assert "R:R" in result.reason
+
+    @pytest.mark.asyncio
+    async def test_rr_gate_passes_good_rr(self, db):
+        """R:R gate allows entry when reward/risk >= min_rr_ratio."""
+        rc = RiskConfig(min_rr_ratio=1.5, auto_take_profit=True, take_profit_pct=3.0, stop_loss_pct=1.5)
+        client = MockClient(balance=1000.0)
+        pt = PositionTracker(db, rc)
+        rm = RiskManager(rc, client, db, position_tracker=pt)
+        rm._current_balance = 1000.0
+        rm._peak_balance = 1000.0
+        rm._open_position_count = 0
+
+        # TP=3% risk=1.5% → R:R = 2.0 >= 1.5
+        d = Decision(action="BUY", confidence=0.75, reasoning="signal", symbol="ETH")
+        result = await rm.validate_decision(d)
+        assert result.approved is True
+
+    @pytest.mark.asyncio
+    async def test_rr_gate_skipped_without_tp(self, risk_env):
+        """R:R gate is skipped when no TP is set (trailing mode)."""
+        rm, pt, _ = risk_env
+        d = Decision(action="BUY", confidence=0.75, reasoning="signal", symbol="ETH")
+        result = await rm.validate_decision(d)
+        assert result.approved is True  # no TP → gate skipped
+
+    @pytest.mark.asyncio
+    async def test_holding_period_blocks_early_close(self, db):
+        """Holding period blocks AI CLOSE if position too young."""
+        rc = RiskConfig(min_holding_minutes=15)
+        client = MockClient(balance=1000.0)
+        pt = PositionTracker(db, rc)
+        rm = RiskManager(rc, client, db, position_tracker=pt)
+        rm._current_balance = 1000.0
+        rm._peak_balance = 1000.0
+
+        # Open a fresh position
+        await pt.open_position("ETH", 2000, 0.5, direction="LONG")
+
+        d = Decision(action="CLOSE", confidence=0.8, reasoning="exit", symbol="ETH")
+        result = await rm.validate_decision(d)
+        assert result.approved is False
+        assert "Holding period" in result.reason
 
 
 # ── Kill switch & daily pause ───────────────────────────────
@@ -473,3 +543,357 @@ class TestSpreadCheck:
         result = await rm.validate_decision(d)
         assert result.approved is False
         assert "Spread" in result.reason
+
+
+# ── ATR-based stop loss ───────────────────────────────────
+
+
+def _make_candle_df(n: int = 50, price: float = 2000.0, volatility: float = 20.0) -> pd.DataFrame:
+    """Generate synthetic 15m candle data for ATR testing."""
+    np.random.seed(42)
+    closes = price + np.cumsum(np.random.randn(n) * volatility * 0.1)
+    highs = closes + np.abs(np.random.randn(n) * volatility * 0.05)
+    lows = closes - np.abs(np.random.randn(n) * volatility * 0.05)
+    opens = closes + np.random.randn(n) * volatility * 0.02
+    volumes = np.random.uniform(100, 1000, n)
+    idx = pd.date_range("2024-01-01", periods=n, freq="15min", tz="UTC")
+    return pd.DataFrame({
+        "open": opens, "high": highs, "low": lows, "close": closes, "volume": volumes,
+    }, index=idx)
+
+
+class MockMarketData:
+    """Minimal mock for MarketData with candle access."""
+    def __init__(self, candles: dict[tuple[str, str], pd.DataFrame] | None = None):
+        self._candles = candles or {}
+
+    def get_candles(self, coin: str, interval: str) -> pd.DataFrame | None:
+        return self._candles.get((coin, interval))
+
+
+class TestAtrStopLoss:
+    def test_atr_sl_long_below_price(self):
+        """ATR-based SL for LONG should be below price."""
+        df = _make_candle_df(50, price=2000.0, volatility=20.0)
+        md = MockMarketData({("ETH", "15m"): df})
+        rc = RiskConfig(use_atr_sl=True, atr_sl_multiplier=2.0, atr_sl_min_pct=0.5, atr_sl_max_pct=3.0)
+        rm = RiskManager(rc, MockClient(), MagicMock(), market_data=md)
+        sl = rm._compute_atr_sl("ETH", 2000.0, is_long=True)
+        assert sl is not None
+        assert sl < 2000.0
+
+    def test_atr_sl_short_above_price(self):
+        """ATR-based SL for SHORT should be above price."""
+        df = _make_candle_df(50, price=2000.0, volatility=20.0)
+        md = MockMarketData({("ETH", "15m"): df})
+        rc = RiskConfig(use_atr_sl=True, atr_sl_multiplier=2.0)
+        rm = RiskManager(rc, MockClient(), MagicMock(), market_data=md)
+        sl = rm._compute_atr_sl("ETH", 2000.0, is_long=False)
+        assert sl is not None
+        assert sl > 2000.0
+
+    def test_atr_sl_clamped_to_min(self):
+        """Very low volatility → SL clamped to min_pct."""
+        # Create near-flat candles (very low ATR)
+        n = 50
+        flat = np.full(n, 2000.0)
+        idx = pd.date_range("2024-01-01", periods=n, freq="15min", tz="UTC")
+        df = pd.DataFrame({
+            "open": flat, "high": flat + 0.01, "low": flat - 0.01,
+            "close": flat, "volume": np.full(n, 100.0),
+        }, index=idx)
+        md = MockMarketData({("ETH", "15m"): df})
+        rc = RiskConfig(use_atr_sl=True, atr_sl_multiplier=2.0, atr_sl_min_pct=0.5)
+        rm = RiskManager(rc, MockClient(), MagicMock(), market_data=md)
+        sl = rm._compute_atr_sl("ETH", 2000.0, is_long=True)
+        assert sl is not None
+        # Min distance = 2000 * 0.5% = 10.0
+        assert sl == pytest.approx(2000.0 - 10.0, abs=0.01)
+
+    def test_atr_sl_clamped_to_max(self):
+        """Very high volatility → SL clamped to max_pct."""
+        n = 50
+        np.random.seed(99)
+        closes = 2000.0 + np.cumsum(np.random.randn(n) * 200)
+        idx = pd.date_range("2024-01-01", periods=n, freq="15min", tz="UTC")
+        df = pd.DataFrame({
+            "open": closes,
+            "high": closes + np.abs(np.random.randn(n) * 100),
+            "low": closes - np.abs(np.random.randn(n) * 100),
+            "close": closes,
+            "volume": np.full(n, 100.0),
+        }, index=idx)
+        md = MockMarketData({("ETH", "15m"): df})
+        rc = RiskConfig(use_atr_sl=True, atr_sl_multiplier=2.0, atr_sl_max_pct=3.0)
+        rm = RiskManager(rc, MockClient(), MagicMock(), market_data=md)
+        sl = rm._compute_atr_sl("ETH", 2000.0, is_long=True)
+        assert sl is not None
+        # Max distance = 2000 * 3% = 60.0 → SL >= 1940
+        assert sl >= 2000.0 - 60.01
+
+    def test_atr_sl_returns_none_without_market_data(self):
+        """No market_data → returns None (fallback to fixed %)."""
+        rc = RiskConfig(use_atr_sl=True)
+        rm = RiskManager(rc, MockClient(), MagicMock())
+        sl = rm._compute_atr_sl("ETH", 2000.0, is_long=True)
+        assert sl is None
+
+    def test_atr_sl_returns_none_when_disabled(self):
+        """use_atr_sl=False → returns None."""
+        df = _make_candle_df(50)
+        md = MockMarketData({("ETH", "15m"): df})
+        rc = RiskConfig(use_atr_sl=False)
+        rm = RiskManager(rc, MockClient(), MagicMock(), market_data=md)
+        sl = rm._compute_atr_sl("ETH", 2000.0, is_long=True)
+        assert sl is None
+
+    def test_atr_sl_returns_none_insufficient_candles(self):
+        """Too few candles → returns None."""
+        df = _make_candle_df(10)  # need >= 15
+        md = MockMarketData({("ETH", "15m"): df})
+        rc = RiskConfig(use_atr_sl=True)
+        rm = RiskManager(rc, MockClient(), MagicMock(), market_data=md)
+        sl = rm._compute_atr_sl("ETH", 2000.0, is_long=True)
+        assert sl is None
+
+    @pytest.mark.asyncio
+    async def test_validate_uses_atr_sl(self, db):
+        """validate_decision should use ATR-based SL when available."""
+        df = _make_candle_df(50, price=2000.0, volatility=20.0)
+        md = MockMarketData({("ETH", "15m"): df})
+        rc = RiskConfig(use_atr_sl=True, atr_sl_multiplier=2.0, atr_sl_min_pct=0.5, atr_sl_max_pct=3.0)
+        client = MockClient(balance=1000.0)
+        pt = PositionTracker(db, rc)
+        rm = RiskManager(rc, client, db, position_tracker=pt, market_data=md)
+        rm._current_balance = 1000.0
+        rm._peak_balance = 1000.0
+        rm._open_position_count = 0
+
+        d = Decision(action="BUY", confidence=0.75, reasoning="signal", symbol="ETH")
+        result = await rm.validate_decision(d)
+        assert result.approved is True
+        # SL should be ATR-based (different from fixed 1.5% → 2000*0.985=1970)
+        assert result.decision.stop_loss is not None
+        assert result.decision.stop_loss < 2000.0
+
+    @pytest.mark.asyncio
+    async def test_validate_falls_back_to_fixed_sl(self, db):
+        """When ATR unavailable, should use fixed stop_loss_pct."""
+        md = MockMarketData()  # no candles → ATR returns None
+        rc = RiskConfig(use_atr_sl=True, stop_loss_pct=1.5)
+        client = MockClient(balance=1000.0)
+        pt = PositionTracker(db, rc)
+        rm = RiskManager(rc, client, db, position_tracker=pt, market_data=md)
+        rm._current_balance = 1000.0
+        rm._peak_balance = 1000.0
+        rm._open_position_count = 0
+
+        d = Decision(action="BUY", confidence=0.75, reasoning="signal", symbol="ETH")
+        result = await rm.validate_decision(d)
+        assert result.approved is True
+        # Fixed 1.5%: 2000 * (1 - 0.015) = 1970
+        assert result.decision.stop_loss == pytest.approx(1970.0, abs=0.01)
+
+
+# ── Risk-based position sizing ──────────────────────────────
+
+
+class TestRiskBasedSizing:
+    def test_risk_cap_reduces_size_for_wide_sl(self):
+        """Wide SL (10%) with small risk budget → risk cap shrinks size."""
+        from risk.position_sizer import PositionSizer
+        # 0.5% risk on 1000 = $5 budget. SL=10% → max_notional=$50 → 5% of bankroll
+        # Cold start would give 5% → risk cap = 5% → same
+        # But with utilization boost 2.5x: cold_start=12.5%, risk_cap=5% → caps to 5%
+        rc = RiskConfig(risk_per_trade_pct=0.5, max_trade_pct=15.0, max_size_boost=2.5)
+        sizer = PositionSizer(rc)
+        stats = {"total_trades": 0}
+
+        # With boost, cold start = 5% * 2.5 = 12.5%
+        uncapped = sizer.compute(1000, stats, 0.75, utilization_boost=2.5, sl_distance_pct=None)
+        assert uncapped.size_pct == pytest.approx(12.5, abs=0.1)
+
+        # With 10% SL: risk_cap = (1000*0.005) / 0.10 / 1000 * 100 = 5%
+        capped = sizer.compute(1000, stats, 0.75, utilization_boost=2.5, sl_distance_pct=10.0)
+        assert capped.size_pct == pytest.approx(5.0, abs=0.1)
+        assert capped.size_usdc < uncapped.size_usdc
+
+    def test_narrow_sl_no_risk_cap(self):
+        """Narrow SL (0.5%) → risk cap is very high, doesn't reduce size."""
+        from risk.position_sizer import PositionSizer
+        rc = RiskConfig(risk_per_trade_pct=1.0, max_trade_pct=15.0)
+        sizer = PositionSizer(rc)
+        stats = {"total_trades": 0}
+
+        no_sl = sizer.compute(1000, stats, 0.75, sl_distance_pct=None)
+        narrow = sizer.compute(1000, stats, 0.75, sl_distance_pct=0.5)
+        assert narrow.size_pct == no_sl.size_pct  # risk cap too high to matter
+
+    def test_sl_none_skips_risk_cap(self):
+        """When sl_distance_pct=None, risk cap is skipped."""
+        from risk.position_sizer import PositionSizer
+        rc = RiskConfig(risk_per_trade_pct=1.0)
+        sizer = PositionSizer(rc)
+        stats = {"total_trades": 0}
+
+        result = sizer.compute(1000, stats, 0.75, sl_distance_pct=None)
+        assert result.size_usdc > 0
+
+    def test_risk_cap_in_kelly_mode(self):
+        """Risk cap also works in Kelly mode (enough trade history)."""
+        from risk.position_sizer import PositionSizer
+        rc = RiskConfig(risk_per_trade_pct=1.0, max_trade_pct=15.0)
+        sizer = PositionSizer(rc)
+        stats = {
+            "total_trades": 50,
+            "win_rate": 0.6,
+            "avg_win": 20.0,
+            "avg_loss": 10.0,
+        }
+        # Kelly should give a decent size, risk cap with wide SL should reduce
+        wide = sizer.compute(1000, stats, 0.8, sl_distance_pct=10.0)
+        narrow = sizer.compute(1000, stats, 0.8, sl_distance_pct=1.0)
+        # Wide SL gets smaller or equal size due to risk cap
+        assert wide.size_usdc <= narrow.size_usdc
+
+
+# ── Partial take profit ──────────────────────────────────────
+
+
+class TestPartialTakeProfit:
+    @pytest.mark.asyncio
+    async def test_partial_close_creates_two_records(self, db, risk_config):
+        """partial_close closes original + creates new position at breakeven."""
+        pt = PositionTracker(db, risk_config)
+        pos_id = await pt.open_position("ETH", 2000, 1.0, stop_loss=1960, direction="LONG")
+
+        pnl, closed_qty, new_id = await pt.partial_close(pos_id, 50.0, 2020.0)
+
+        # Original closed
+        orig = await pt._get_by_id(pos_id)
+        assert orig["status"] == "CLOSED"
+        assert orig["pnl"] is not None
+        assert pnl > 0  # profitable close
+
+        # New position
+        new_pos = await pt._get_by_id(new_id)
+        assert new_pos["status"] == "OPEN"
+        assert new_pos["quantity"] == pytest.approx(0.5, abs=0.001)
+        assert new_pos["entry_price"] == 2000  # same entry
+        assert new_pos["stop_loss"] == 2000  # breakeven
+        assert new_pos["partial_closed"] == 1
+
+    @pytest.mark.asyncio
+    async def test_partial_close_short(self, db, risk_config):
+        """Partial close works for SHORT positions."""
+        pt = PositionTracker(db, risk_config)
+        pos_id = await pt.open_position("ETH", 2000, 1.0, stop_loss=2040, direction="SHORT")
+
+        pnl, closed_qty, new_id = await pt.partial_close(pos_id, 50.0, 1980.0)
+        assert pnl > 0  # SHORT profitable (entry=2000, exit=1980)
+        assert closed_qty == pytest.approx(0.5, abs=0.001)
+
+        new_pos = await pt._get_by_id(new_id)
+        assert new_pos["direction"] == "SHORT"
+        assert new_pos["stop_loss"] == 2000  # breakeven
+
+    @pytest.mark.asyncio
+    async def test_partial_tp_triggers_in_check_sl_tp(self, db):
+        """check_sl_tp returns PARTIAL_CLOSE when gain >= trigger."""
+        rc = RiskConfig(
+            partial_tp_enabled=True,
+            partial_tp_trigger_pct=1.0,
+            sl_tp_grace_seconds=0,
+        )
+        pt = PositionTracker(db, rc)
+        await pt.open_position("ETH", 2000, 1.0, stop_loss=1960, direction="LONG")
+
+        # Price at +1.5% → triggers partial TP
+        to_close = await pt.check_sl_tp({"ETH": 2030.0})
+        assert len(to_close) == 1
+        assert to_close[0]["action"] == "PARTIAL_CLOSE"
+
+    @pytest.mark.asyncio
+    async def test_partial_tp_skipped_if_already_partial(self, db):
+        """Positions with partial_closed=1 skip partial TP check."""
+        rc = RiskConfig(
+            partial_tp_enabled=True,
+            partial_tp_trigger_pct=1.0,
+            sl_tp_grace_seconds=0,
+            trailing_breakeven_pct=0.5,
+            trailing_start_pct=1.0,
+        )
+        pt = PositionTracker(db, rc)
+        pos_id = await pt.open_position("ETH", 2000, 1.0, stop_loss=1960, direction="LONG")
+        # Simulate partial close already happened
+        _, _, new_id = await pt.partial_close(pos_id, 50.0, 2020.0)
+
+        # New position has partial_closed=1 → should not trigger partial TP again
+        to_close = await pt.check_sl_tp({"ETH": 2030.0})
+        # Should get trailing/SL check, not PARTIAL_CLOSE
+        partial_actions = [t for t in to_close if t["action"] == "PARTIAL_CLOSE"]
+        assert len(partial_actions) == 0
+
+    @pytest.mark.asyncio
+    async def test_partial_tp_disabled(self, db):
+        """partial_tp_enabled=False → no partial close triggers."""
+        rc = RiskConfig(
+            partial_tp_enabled=False,
+            sl_tp_grace_seconds=0,
+        )
+        pt = PositionTracker(db, rc)
+        await pt.open_position("ETH", 2000, 1.0, stop_loss=1960, direction="LONG")
+
+        to_close = await pt.check_sl_tp({"ETH": 2030.0})
+        partial_actions = [t for t in to_close if t["action"] == "PARTIAL_CLOSE"]
+        assert len(partial_actions) == 0
+
+
+# ── ATR trailing distance ─────────────────────────────────────
+
+
+class TestAtrTrailingDistance:
+    def test_atr_trailing_returns_distances(self, db, risk_config):
+        """ATR trailing returns (trail_pct, tight_pct) when candles available."""
+        df = _make_candle_df(50, price=2000.0, volatility=20.0)
+        md = MockMarketData({("ETH", "15m"): df})
+        rc = RiskConfig(
+            use_atr_trailing=True,
+            atr_trailing_multiplier=1.5,
+            atr_trailing_tight_multiplier=1.0,
+            atr_trailing_min_pct=0.5,
+            atr_trailing_max_pct=3.0,
+        )
+        pt = PositionTracker(db, rc, market_data=md)
+        result = pt._get_atr_trailing_distance("ETH", 2000.0)
+        assert result is not None
+        trail_pct, tight_pct = result
+        assert 0.5 <= trail_pct <= 3.0
+        assert 0.5 <= tight_pct <= 3.0
+        assert trail_pct >= tight_pct
+
+    def test_atr_trailing_returns_none_without_market_data(self, db, risk_config):
+        """No market_data → returns None (fallback to fixed)."""
+        pt = PositionTracker(db, risk_config)
+        result = pt._get_atr_trailing_distance("ETH", 2000.0)
+        assert result is None
+
+    def test_atr_trailing_returns_none_when_disabled(self, db):
+        rc = RiskConfig(use_atr_trailing=False)
+        df = _make_candle_df(50)
+        md = MockMarketData({("ETH", "15m"): df})
+        pt = PositionTracker(db, rc, market_data=md)
+        result = pt._get_atr_trailing_distance("ETH", 2000.0)
+        assert result is None
+
+    def test_atr_trailing_caches_result(self, db):
+        """Result is cached for 5 minutes."""
+        df = _make_candle_df(50, price=2000.0)
+        md = MockMarketData({("ETH", "15m"): df})
+        rc = RiskConfig(use_atr_trailing=True)
+        pt = PositionTracker(db, rc, market_data=md)
+
+        result1 = pt._get_atr_trailing_distance("ETH", 2000.0)
+        result2 = pt._get_atr_trailing_distance("ETH", 2000.0)
+        assert result1 == result2
+        assert "ETH" in pt._atr_cache
