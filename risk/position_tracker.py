@@ -250,16 +250,33 @@ class PositionTracker:
 
         new_trailing = old_trailing
 
+        # After partial TP, original_sl = entry → half-step/breakeven tiers are dead.
+        # Start trailing at half_pct instead of start_pct so gains are protected sooner.
+        effective_start = (
+            self._rc.trailing_half_pct if pos.get("partial_closed")
+            else self._rc.trailing_start_pct
+        )
+
         if current_gain_pct >= self._rc.trailing_tight_pct:
             new_trailing = new_max * (1 - tight_pct / 100)
-        elif current_gain_pct >= self._rc.trailing_start_pct:
+            # If ATR trail is wider than breakeven, lock 50% of profit from entry
+            if new_trailing < entry:
+                new_trailing = entry + (new_max - entry) * 0.5
+        elif current_gain_pct >= effective_start:
             new_trailing = new_max * (1 - trail_pct / 100)
+            # If ATR trail is wider than breakeven, lock 50% of profit from entry
+            if new_trailing < entry and current_gain_pct >= self._rc.trailing_breakeven_pct:
+                new_trailing = entry + (new_max - entry) * 0.5
         elif current_gain_pct >= self._rc.trailing_breakeven_pct:
             new_trailing = entry
         elif current_gain_pct >= self._rc.trailing_half_pct:
             # Midpoint between original SL and entry — reduce risk without breakeven
             original_sl = pos.get("original_sl") or pos.get("stop_loss") or 0.0
             new_trailing = (entry + original_sl) / 2
+
+        # Breakeven floor: once gain >= breakeven threshold, SL never worse than entry
+        if current_gain_pct >= self._rc.trailing_breakeven_pct:
+            new_trailing = max(new_trailing, entry)
 
         # Clamp: SL must stay below current price (otherwise it triggers immediately)
         new_trailing = min(new_trailing, current_price)
@@ -313,16 +330,33 @@ class PositionTracker:
 
         new_trailing = old_trailing
 
+        # After partial TP, original_sl = entry → half-step/breakeven tiers are dead.
+        # Start trailing at half_pct instead of start_pct so gains are protected sooner.
+        effective_start = (
+            self._rc.trailing_half_pct if pos.get("partial_closed")
+            else self._rc.trailing_start_pct
+        )
+
         if current_gain_pct >= self._rc.trailing_tight_pct:
             new_trailing = new_min * (1 + tight_pct / 100)
-        elif current_gain_pct >= self._rc.trailing_start_pct:
+            # If ATR trail is wider than breakeven, lock 50% of profit from entry
+            if new_trailing > entry:
+                new_trailing = entry - (entry - new_min) * 0.5
+        elif current_gain_pct >= effective_start:
             new_trailing = new_min * (1 + trail_pct / 100)
+            # If ATR trail is wider than breakeven, lock profit from entry instead
+            if new_trailing > entry and current_gain_pct >= self._rc.trailing_breakeven_pct:
+                new_trailing = entry - (entry - new_min) * 0.5
         elif current_gain_pct >= self._rc.trailing_breakeven_pct:
             new_trailing = entry
         elif current_gain_pct >= self._rc.trailing_half_pct:
             # Midpoint between original SL and entry — reduce risk without breakeven
             original_sl = pos.get("original_sl") or pos.get("stop_loss") or float("inf")
             new_trailing = (entry + original_sl) / 2
+
+        # Breakeven ceiling: once gain >= breakeven threshold, SL never worse than entry
+        if current_gain_pct >= self._rc.trailing_breakeven_pct:
+            new_trailing = min(new_trailing, entry)
 
         # Clamp: SL must stay above current price (otherwise it triggers immediately)
         new_trailing = max(new_trailing, current_price)

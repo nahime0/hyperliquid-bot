@@ -6,10 +6,16 @@ Fractional:     size = bankroll * (f / 4)   # conservative quarter-Kelly
 Cold-start behaviour (< COLD_START_TRADES trades):
   Kelly produces tiny sizes because defaults are conservative and
   the ×0.5 penalty shrinks them further.  On a small bankroll this
-  falls below the Binance minimum order notional ($5).
-  → During cold-start we use a fixed COLD_START_PCT of the bankroll
-    instead, scaled by AI confidence, so trades can actually execute
-    and generate the history Kelly needs.
+  falls below the minimum order notional ($10).
+  → During cold-start we use usdc_per_position from config as the base
+    size (e.g. $40), falling back to COLD_START_PCT if not configured.
+    This ensures meaningful trade sizes from the start.
+
+Kelly-mode floor:
+  Even with enough trade history, quarter-Kelly often produces
+  tiny sizes (especially with conservative stats).  The sizer uses
+  max(MIN_ORDER_USDC, usdc_per_position) as a floor so that trades
+  are at least the configured per-position USDC target.
 
 The sizer also applies:
 - Confidence scaling (AI confidence multiplied into size)
@@ -81,12 +87,17 @@ class PositionSizer:
         total_trades = trade_stats.get("total_trades", 0)
         max_pct = self._config.max_trade_pct
 
-        # ── Cold-start: fixed % of bankroll ──────────────────
-        # During cold-start, use a flat percentage.  The AI engine has
-        # already filtered by confidence threshold, so we do NOT scale
-        # by confidence again here — that would double-penalise.
+        # ── Cold-start: usdc_per_position or fallback % ──────
+        # During cold-start, use usdc_per_position from config as the
+        # base trade size. Falls back to COLD_START_PCT if bankroll is
+        # too small for usdc_per_position to make sense.
         if total_trades < COLD_START_TRADES:
-            size_pct = COLD_START_PCT
+            # Prefer absolute USDC target from config
+            usd_per_pos = self._config.usdc_per_position
+            if usd_per_pos > 0 and bankroll > 0:
+                size_pct = (usd_per_pos / bankroll) * 100
+            else:
+                size_pct = COLD_START_PCT
 
             # Apply utilization boost
             if utilization_boost > 1.0:
@@ -115,7 +126,7 @@ class PositionSizer:
             if size_usdc < MIN_ORDER_USDC:
                 return SizeResult(
                     size_usdc=0, size_pct=0, kelly_f=0, capped=False,
-                    reason=f"Cold-start size {size_usdc:.2f} USDC below minimum {MIN_ORDER_USDC}",
+                    reason=f"Cold-start size {size_usdc:.2f} USDC below exchange minimum {MIN_ORDER_USDC}",
                 )
 
             reason = (
@@ -178,18 +189,27 @@ class PositionSizer:
             capped = True
 
         # Floor: ensure minimum viable trade during Kelly mode too
+        # Use usdc_per_position as floor (not just MIN_ORDER_USDC) so
+        # Kelly doesn't produce dust orders when stats are conservative.
+        # If the floor exceeds max_trade_pct, fall back to max allowed;
+        # only reject if even that is below the exchange minimum ($10).
         size_usdc = round(bankroll * (size_pct / 100), 2)
-        if size_usdc < MIN_ORDER_USDC:
-            # If Kelly says too small, fall back to minimum viable size
-            min_pct = (MIN_ORDER_USDC / bankroll) * 100 if bankroll > 0 else 0
+        min_size = max(MIN_ORDER_USDC, self._config.usdc_per_position)
+        if size_usdc < min_size:
+            min_pct = (min_size / bankroll) * 100 if bankroll > 0 else 0
             if min_pct <= max_pct:
                 size_pct = min_pct
-                size_usdc = MIN_ORDER_USDC
+                size_usdc = round(min_size, 2)
             else:
-                return SizeResult(
-                    size_usdc=0, size_pct=0, kelly_f=kelly_f, capped=False,
-                    reason=f"Size {size_usdc:.2f} USDC below minimum {MIN_ORDER_USDC}",
-                )
+                # Floor exceeds cap — use max allowed instead
+                size_pct = max_pct
+                size_usdc = round(bankroll * (max_pct / 100), 2)
+                capped = True
+                if size_usdc < MIN_ORDER_USDC:
+                    return SizeResult(
+                        size_usdc=0, size_pct=0, kelly_f=kelly_f, capped=False,
+                        reason=f"Size {size_usdc:.2f} USDC below exchange minimum {MIN_ORDER_USDC}",
+                    )
 
         reason = (
             f"kelly_f={kelly_f:.4f} quarter={fraction:.4f} "

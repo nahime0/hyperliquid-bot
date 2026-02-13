@@ -323,6 +323,93 @@ class TestTrailingStop:
         assert sl2 <= sl1  # SL should never increase for SHORT
 
 
+# ── Trailing after partial close ───────────────────────────
+
+
+class TestTrailingAfterPartialClose:
+    """After partial TP, original_sl = entry → half-step/breakeven tiers are dead.
+    Trailing should start at half_pct (0.5%) instead of start_pct (1.5%)."""
+
+    @pytest.mark.asyncio
+    async def test_partial_close_long_trailing_starts_early(self, position_tracker, risk_config):
+        """LONG after partial TP: trailing kicks in at 0.5% (not 1.5%).
+
+        Need >= ~1.01% gain so trail formula (max * 0.99) exceeds breakeven (entry).
+        """
+        pid = await position_tracker.open_position(
+            symbol="ETH", entry_price=2000, quantity=1.0,
+            stop_loss=1940, take_profit=None, direction="LONG",
+        )
+        _, _, new_pid = await position_tracker.partial_close(pid, close_pct=50, exit_price=2025)
+
+        # Price at +1.1% — below old trailing_start (1.5%) but trail formula > entry
+        await position_tracker.check_sl_tp({"ETH": 2022})
+        pos = await position_tracker.get_position_for_symbol("ETH")
+
+        trailing = pos.get("trailing_sl")
+        # Trail formula: 2022 * (1 - 1.0/100) = 2001.78 > 2000 (breakeven)
+        expected = 2022 * (1 - risk_config.trailing_distance_pct / 100)
+        assert trailing == pytest.approx(expected, rel=1e-4)
+        assert trailing > 2000  # above breakeven = real improvement
+
+    @pytest.mark.asyncio
+    async def test_partial_close_short_trailing_starts_early(self, position_tracker, risk_config):
+        """SHORT after partial TP: trailing kicks in at 0.5% (not 1.5%)."""
+        pid = await position_tracker.open_position(
+            symbol="BTC", entry_price=60000, quantity=0.02,
+            stop_loss=61800, take_profit=None, direction="SHORT",
+        )
+        _, _, new_pid = await position_tracker.partial_close(pid, close_pct=50, exit_price=59250)
+
+        # Price at -1.0% — below old trailing_start (1.5%) but above half_pct (0.5%)
+        await position_tracker.check_sl_tp({"BTC": 59400})
+        pos = await position_tracker.get_position_for_symbol("BTC")
+
+        trailing = pos.get("trailing_sl")
+        # Should have moved from breakeven (60000) to trail formula: 59400 * (1 + 1.0/100) = 59994
+        expected = 59400 * (1 + risk_config.trailing_distance_pct / 100)
+        assert trailing == pytest.approx(expected, rel=1e-4)
+        assert trailing < 60000  # below entry = improvement for SHORT
+
+    @pytest.mark.asyncio
+    async def test_partial_close_short_aztec_scenario(self, position_tracker, risk_config):
+        """Reproduce the AZTEC bug: SHORT partial TP, +1.45% gain, SL stuck at breakeven."""
+        pid = await position_tracker.open_position(
+            symbol="AZTEC", entry_price=0.023786, quantity=1261.0,
+            stop_loss=0.02450, take_profit=None, direction="SHORT",
+        )
+        _, _, new_pid = await position_tracker.partial_close(
+            pid, close_pct=50, exit_price=0.023489,
+        )
+
+        # Price drops to 0.023442 = 1.45% below entry (was stuck before fix)
+        await position_tracker.check_sl_tp({"AZTEC": 0.023442})
+        pos = await position_tracker.get_position_for_symbol("AZTEC")
+
+        trailing = pos.get("trailing_sl")
+        # Before fix: trailing stayed at 0.023786 (breakeven). After fix: should trail.
+        assert trailing < 0.023786, (
+            f"Trailing SL should have moved below breakeven, got {trailing}"
+        )
+        expected = 0.023442 * (1 + risk_config.trailing_distance_pct / 100)
+        assert trailing == pytest.approx(expected, rel=1e-4)
+
+    @pytest.mark.asyncio
+    async def test_normal_position_still_needs_start_pct(self, position_tracker, risk_config):
+        """Non-partial positions still require trailing_start_pct to trail."""
+        await position_tracker.open_position(
+            symbol="ETH", entry_price=2000, quantity=0.5,
+            stop_loss=1960, take_profit=2200, direction="LONG",
+        )
+        # Price at +0.8% — above breakeven_pct (0.5%) but below start_pct
+        await position_tracker.check_sl_tp({"ETH": 2016})
+        pos = await position_tracker.get_position_for_symbol("ETH")
+
+        trailing = pos.get("trailing_sl")
+        # 0.8% >= breakeven_pct(0.5%) → SL at entry (breakeven)
+        assert trailing == pytest.approx(2000, rel=1e-4)
+
+
 # ── AI adjustment methods ───────────────────────────────────
 
 
