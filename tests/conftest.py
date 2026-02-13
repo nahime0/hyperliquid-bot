@@ -21,7 +21,7 @@ def pytest_configure(config):
 
 @pytest.fixture
 def risk_config() -> RiskConfig:
-    return RiskConfig()
+    return RiskConfig(sl_tp_grace_seconds=0, partial_tp_enabled=False)
 
 
 @pytest.fixture

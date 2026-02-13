@@ -299,7 +299,7 @@ class HyperliquidClient:
         """Place a limit GTC order."""
         sz = self.round_size(coin, size)
         logger.info(
-            "Placing LIMIT %s %s: size=%.6f price=%.4f",
+            "Placing LIMIT %s %s: size=%.6f price=%g",
             "BUY" if is_buy else "SELL", coin, sz, price,
         )
         order_type = {"limit": {"tif": "Gtc"}}
@@ -310,10 +310,14 @@ class HyperliquidClient:
         logger.info("Order result: %s", result)
         return result
 
-    async def close_position(self, coin: str) -> dict[str, Any]:
-        """Close an entire position via market_close."""
-        logger.info("Closing position: %s", coin)
-        result = await self._retry(self.exchange.market_close, coin)
+    async def close_position(self, coin: str, sz: float | None = None) -> dict[str, Any]:
+        """Close a position via market_close. If sz is given, partial close."""
+        if sz is not None:
+            logger.info("Partial closing position: %s sz=%.6f", coin, sz)
+            result = await self._retry(self.exchange.market_close, coin, sz)
+        else:
+            logger.info("Closing position: %s", coin)
+            result = await self._retry(self.exchange.market_close, coin)
         logger.info("Close result: %s", result)
         return result
 

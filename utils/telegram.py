@@ -71,7 +71,7 @@ class TelegramNotifier:
         price: float,
         pnl: float | None = None,
     ) -> None:
-        parts = [f"*{action}* `{symbol}`", f"Qty: `{qty:.6f}`", f"Price: `{price:.4f}`"]
+        parts = [f"*{action}* `{symbol}`", f"Qty: `{qty:.6f}`", f"Price: `{price:g}`"]
         if pnl is not None:
             emoji = "+" if pnl >= 0 else ""
             parts.append(f"PnL: `{emoji}{pnl:.4f}` USDC")

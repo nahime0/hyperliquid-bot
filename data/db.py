@@ -171,6 +171,7 @@ _MIGRATIONS = [
     "ALTER TABLE positions ADD COLUMN funding_paid REAL DEFAULT 0",
     "ALTER TABLE positions ADD COLUMN min_price_seen REAL",
     "ALTER TABLE trades ADD COLUMN direction TEXT DEFAULT 'LONG'",
+    "ALTER TABLE positions ADD COLUMN partial_closed INTEGER DEFAULT 0",
 ]
 
 

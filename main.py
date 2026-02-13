@@ -46,6 +46,7 @@ from strategies.mean_reversion import MeanReversionStrategy
 from strategies.multi_strategy import MultiStrategy
 from strategies.rsi_divergence import RSIDivergenceStrategy
 from strategies.trend_filter import TrendFilter
+from strategies.trend_following import TrendFollowingStrategy
 from utils.logger import setup_logging, get_logger
 from utils.telegram import TelegramNotifier
 
@@ -81,9 +82,9 @@ class Bot:
         self._client = HyperliquidClient(settings)
         self._db = Database(settings.db_path)
         self._market_data = MarketData(self._client, settings)
-        self._advisor = AIAdvisor(model=settings.ai.model, timeout=settings.ai.timeout, db=self._db)
-        self._positions = PositionTracker(self._db, settings.risk)
-        self._risk = RiskManager(settings.risk, self._client, self._db, self._positions, market_config=settings.market)
+        self._advisor = AIAdvisor(config=settings.ai, db=self._db)
+        self._positions = PositionTracker(self._db, settings.risk, market_data=self._market_data)
+        self._risk = RiskManager(settings.risk, self._client, self._db, self._positions, market_config=settings.market, market_data=self._market_data)
 
         # Autonomous components
         self._trend_filter = TrendFilter(self._market_data)
@@ -108,12 +109,25 @@ class Bot:
             settings.strategy,
             db=self._db,
         )
+        self._trend_follow = TrendFollowingStrategy(
+            self._market_data,
+            self._trend_filter,
+            self._cooldown,
+            self._positions,
+            settings.risk,
+            interval=settings.strategy.trend_interval,
+            min_candle_volume_usdc=settings.strategy.min_candle_volume_usdc,
+            change_threshold=settings.strategy.tf_change_threshold,
+            db=self._db,
+        )
 
         # Build active strategy based on mode
         if strategy_mode == "mean_reversion":
             self._strategy: Strategy = self._mean_rev
         elif strategy_mode == "rsi_div":
             self._strategy = self._rsi_div
+        elif strategy_mode == "trend_following":
+            self._strategy = self._trend_follow
         else:  # "multi" (default)
             sub_strategies: list[Strategy] = []
             for name in settings.strategy.active_strategies:
@@ -121,12 +135,11 @@ class Bot:
                     sub_strategies.append(self._mean_rev)
                 elif name == "rsi_divergence":
                     sub_strategies.append(self._rsi_div)
+                elif name == "trend_following":
+                    sub_strategies.append(self._trend_follow)
             if not sub_strategies:
-                sub_strategies = [self._mean_rev, self._rsi_div]
-            self._strategy = MultiStrategy(
-                sub_strategies,
-                max_decisions=settings.risk.max_open_positions,
-            )
+                sub_strategies = [self._mean_rev, self._rsi_div, self._trend_follow]
+            self._strategy = MultiStrategy(sub_strategies)
 
         self._telegram = TelegramNotifier(settings.telegram)
 
@@ -163,6 +176,9 @@ class Bot:
         logger.info("  AI review: %s  |  Paper: %s  |  Once: %s  |  Strategy: %s", not self._no_ai, self._paper, self._once, self._strategy_mode)
         logger.info("  Leverage: %dx  |  Margin: %s", cfg.default_leverage, cfg.margin_mode)
         logger.info("=" * 60)
+
+        # Ensure AI context directory exists
+        (Path("data") / "ai_context").mkdir(parents=True, exist_ok=True)
 
         await self._client.connect()
         await self._db.connect()
@@ -209,6 +225,8 @@ class Bot:
         self._mean_rev.set_max_funding_rate(cfg.max_funding_rate)
         self._rsi_div.set_coins(self._active_coins)
         self._rsi_div.set_max_funding_rate(cfg.max_funding_rate)
+        self._trend_follow.set_coins(self._active_coins)
+        self._trend_follow.set_max_funding_rate(cfg.max_funding_rate)
         await self._strategy.start()
 
         # Risk manager
@@ -336,7 +354,8 @@ class Bot:
             await self._write_status(metrics)
             return
 
-        # 2. (SL/TP check moved to independent _sl_tp_monitor task)
+        # 2. Refresh mid prices via REST (WS allMids disabled)
+        await self._market_data.refresh_mid_prices()
 
         # 3. Refresh funding rates periodically
         if self._cycle_count % FUNDING_REFRESH_INTERVAL == 1:
@@ -384,22 +403,38 @@ class Bot:
                 logger.info("Removed stale deferred %s — signal no longer present", sym)
 
             # Check which deferred have met their conditions
-            ready_symbols = await self._advisor.check_deferred(mid_prices)
+            ready_symbols = set(await self._advisor.check_deferred(mid_prices))
             for sym in ready_symbols:
                 if sym not in candidate_syms:
                     await self._advisor.remove_deferred(sym)  # conditions met but signal gone
 
-            # Filter out candidates for symbols still deferred
+            # Filter out candidates for symbols still deferred (same direction only).
+            # If the new candidate is opposite direction, cancel the deferred and let it through.
             deferred_syms = self._advisor.deferred_symbols
             if deferred_syms:
-                filtered = [d for d in candidates if d.symbol in deferred_syms]
-                if filtered:
+                keep: list = []
+                filtered_names: list[str] = []
+                for d in candidates:
+                    if d.symbol in deferred_syms:
+                        deferred_action = self._advisor.get_deferred_action(d.symbol)
+                        if deferred_action and d.action != deferred_action:
+                            # Opposite direction → cancel deferred, let new candidate through
+                            await self._advisor.remove_deferred(d.symbol)
+                            logger.info(
+                                "Cancelled deferred %s %s — new opposite signal: %s %s",
+                                deferred_action, d.symbol, d.action, d.symbol,
+                            )
+                            keep.append(d)
+                        else:
+                            filtered_names.append(f"{d.action} {d.symbol}")
+                    else:
+                        keep.append(d)
+                if filtered_names:
                     logger.info(
                         "Filtered %d deferred candidate(s): %s",
-                        len(filtered),
-                        ", ".join(f"{d.action} {d.symbol}" for d in filtered),
+                        len(filtered_names), ", ".join(filtered_names),
                     )
-                candidates = [d for d in candidates if d.symbol not in deferred_syms]
+                candidates = keep
 
         # 6. AI advisor call
         open_positions = await self._positions.get_open_positions()
@@ -410,26 +445,32 @@ class Bot:
         order_books = await self._fetch_order_books(ob_coins) if ob_coins else {}
 
         # Enrich positions with current prices, PnL, indicators
+        # Market context is extracted to a shared top-level market_data dict
+        market_data: dict[str, dict[str, Any]] = {}
         now_utc = datetime.now(timezone.utc)
         for pos in open_positions:
             mid = self._market_data.get_mid_price(pos["symbol"])
             if mid and mid > 0:
-                pos["current_price"] = mid
+                pos["price"] = mid
                 direction = pos.get("direction", "LONG")
                 if direction == "LONG":
-                    pos["unrealized_pnl"] = round((mid - pos["entry_price"]) * pos["quantity"], 4)
+                    pos["upnl"] = round((mid - pos["entry_price"]) * pos["quantity"], 4)
                     pos["pnl_pct"] = round((mid - pos["entry_price"]) / pos["entry_price"] * 100, 2)
                 else:
-                    pos["unrealized_pnl"] = round((pos["entry_price"] - mid) * pos["quantity"], 4)
+                    pos["upnl"] = round((pos["entry_price"] - mid) * pos["quantity"], 4)
                     pos["pnl_pct"] = round((pos["entry_price"] - mid) / pos["entry_price"] * 100, 2)
+            # Rename entry_price → entry for compact payload
+            if "entry_price" in pos:
+                pos["entry"] = pos.pop("entry_price")
             if pos.get("opened_at"):
                 opened = datetime.fromisoformat(pos["opened_at"].replace("Z", "+00:00"))
-                pos["age_minutes"] = round((now_utc - opened).total_seconds() / 60, 1)
-            # Add indicators and market context from market data
-            pos["indicators"] = self._get_indicators(pos["symbol"])
-            pos["market_context"] = self._get_market_context(
-                pos["symbol"], asset_ctx_map=asset_ctx_map, order_books=order_books,
-            )
+                pos["age_min"] = round((now_utc - opened).total_seconds() / 60, 1)
+            sym = pos["symbol"]
+            pos["indicators"] = self._get_indicators(sym)
+            if sym not in market_data:
+                market_data[sym] = self._get_market_context(
+                    sym, asset_ctx_map=asset_ctx_map, order_books=order_books,
+                )
 
         # Build opportunity list from candidates (entries only)
         opportunities = []
@@ -437,23 +478,26 @@ class Bot:
             if d.action in ("BUY", "SHORT"):
                 opp = {
                     "symbol": d.symbol,
-                    "proposed_action": d.action,
+                    "action": d.action,
                     "confidence": d.confidence,
                     "strategy": d.strategy_type or "unknown",
                     "reasoning": d.reasoning,
-                    "current_price": self._market_data.get_mid_price(d.symbol) or 0,
-                    "proposed_stop_loss": d.stop_loss,
-                    "proposed_take_profit": d.take_profit,
-                    "proposed_size_pct": d.size_pct,
-                    "indicators": self._get_indicators(d.symbol) if d.symbol else {},
-                    "market_context": self._get_market_context(
-                        d.symbol, asset_ctx_map=asset_ctx_map, order_books=order_books,
-                    ) if d.symbol else {},
+                    "price": self._market_data.get_mid_price(d.symbol) or 0,
+                    "sl": d.stop_loss,
+                    "tp": d.take_profit,
+                    "size_pct": d.size_pct,
                 }
+                sym = d.symbol
+                if sym:
+                    opp["indicators"] = self._get_indicators(sym)
+                    if sym not in market_data:
+                        market_data[sym] = self._get_market_context(
+                            sym, asset_ctx_map=asset_ctx_map, order_books=order_books,
+                        )
                 opportunities.append(opp)
 
-        # Cap opportunities to top 10 by score; deferred-ready always pass through
-        MAX_OPPORTUNITIES_PER_CYCLE = 10
+        # Cap opportunities by score; deferred-ready always pass through
+        MAX_OPPORTUNITIES_PER_CYCLE = 15
         if len(opportunities) > MAX_OPPORTUNITIES_PER_CYCLE:
             deferred_ready_opps = [o for o in opportunities if o["symbol"] in ready_symbols]
             regular_opps = [o for o in opportunities if o["symbol"] not in ready_symbols]
@@ -496,23 +540,24 @@ class Bot:
                 "balance_usdc": metrics.get("current_balance", 0),
                 "daily_pnl_pct": -metrics.get("daily_drawdown_pct", 0),
                 "total_pnl": metrics.get("current_balance", 0) - metrics.get("peak_balance", 0),
-                "open_position_count": metrics.get("open_positions", 0),
-                "max_positions": metrics.get("max_open_positions", 15),
-                "capital_utilization_pct": round(utilization * 100, 1),
-                "total_margin_used": metrics.get("total_margin_used", 0),
-                "available_margin": metrics.get("available_margin", 0),
-                "target_utilization_pct": round(metrics.get("target_utilization", 0.5) * 100, 1),
+                "open_pos": metrics.get("open_positions", 0),
+                "max_pos": metrics.get("max_open_positions", 15),
+                "util_pct": round(utilization * 100, 1),
+                "margin_used": metrics.get("total_margin_used", 0),
+                "margin_free": metrics.get("available_margin", 0),
+                "target_util_pct": round(metrics.get("target_utilization", 0.5) * 100, 1),
             }
-            recent_trades = await self._db.get_recent_trades(20)
+            recent_trades = await self._db.get_recent_trades(10)
             trade_stats = await self._db.get_trade_stats()
             account["win_rate"] = trade_stats.get("win_rate", 0)
-            account["consecutive_losses"] = trade_stats.get("consecutive_losses", 0)
+            account["consec_losses"] = trade_stats.get("consecutive_losses", 0)
 
             deferred_summary = self._advisor.get_deferred_summary()
             ai_response = await self._advisor.consult(
                 positions=positions_for_ai,
                 opportunities=opportunities,
                 account=account,
+                market_data=market_data,
                 recent_trades=recent_trades,
                 trade_stats=trade_stats,
                 deferred=deferred_summary,
@@ -614,8 +659,33 @@ class Bot:
                         orig.leverage = adj["leverage"]
                     approved.append(orig)
 
-            # Keep AI-approved entries + all CLOSE/SELL decisions
-            candidates = approved + [d for d in candidates if d.action in ("CLOSE", "SELL")]
+            # Keep AI-approved entries + all CLOSE/SELL/SCALE_UP decisions
+            candidates = approved + [d for d in candidates if d.action in ("CLOSE", "SELL", "SCALE_UP")]
+
+        # 6b. Protect positions with profitable SL from premature strategy exits
+        # When trailing SL is already in profit, only AI or SL/TP monitor should close
+        if not self._no_ai:
+            protected_syms: set[str] = set()
+            for pos in open_positions:
+                sl = pos.get("stop_loss")
+                entry = pos.get("entry") or pos.get("entry_price")
+                direction = pos.get("direction", "LONG")
+                if sl is not None and entry:
+                    if (direction == "LONG" and sl >= entry) or (direction == "SHORT" and sl <= entry):
+                        protected_syms.add(pos["symbol"])
+            if protected_syms:
+                before = len(candidates)
+                candidates = [
+                    d for d in candidates
+                    if not (d.action in ("CLOSE", "SELL") and d.symbol in protected_syms
+                            and d.strategy_type != "ai_advisor")
+                ]
+                dropped = before - len(candidates)
+                if dropped:
+                    logger.info(
+                        "Protected %d profitable-SL position(s) from strategy exit: %s",
+                        dropped, ", ".join(protected_syms),
+                    )
 
         # 7. Sort: CLOSE first, then SCALE_UP, then entries
         _ACTION_ORDER = {"SELL": 0, "CLOSE": 0, "SCALE_UP": 1, "BUY": 2, "SHORT": 2, "HOLD": 3}
@@ -766,7 +836,7 @@ class Bot:
                             leverage=leverage,
                         )
                         logger.info(
-                            "RECONCILE: Imported orphaned %s %s — entry=%.4f size=%.4f SL=%.4f TP=%.4f (id=%d)",
+                            "RECONCILE: Imported orphaned %s %s — entry=%g size=%g SL=%g TP=%g (id=%d)",
                             direction, coin, entry_px, size, sl, tp, pos_id,
                         )
                     except ValueError:
@@ -818,6 +888,7 @@ class Bot:
             except asyncio.TimeoutError:
                 pass
             try:
+                await self._market_data.refresh_mid_prices()
                 open_pos = await self._positions.get_open_positions()
                 n = len(open_pos)
                 if n:
@@ -834,7 +905,7 @@ class Bot:
         if not positions:
             return
 
-        # Get current prices — prefer WS mid, fallback to REST
+        # Get current prices from REST cache (refreshed by monitor before this call)
         prices: dict[str, float] = {}
         for pos in positions:
             sym = pos["symbol"]
@@ -843,25 +914,63 @@ class Bot:
                 if mid and mid > 0:
                     prices[sym] = mid
                 else:
-                    try:
-                        rest_price = await self._client.get_price(sym)
-                        if rest_price > 0:
-                            prices[sym] = rest_price
-                            logger.warning("Using REST fallback price for %s (WS stale)", sym)
-                    except Exception:
-                        logger.warning("No price available for %s — SL/TP check skipped", sym)
+                    logger.warning("No price available for %s — SL/TP check skipped", sym)
 
         to_close = await self._positions.check_sl_tp(prices)
 
         for item in to_close:
             pos = item["position"]
             reason = item["reason"]
+            action = item.get("action", "CLOSE")
             symbol = pos["symbol"]
             price = prices.get(symbol, pos["entry_price"])
             direction = pos.get("direction", "LONG")
 
+            # ── PARTIAL_CLOSE handling ──
+            if action == "PARTIAL_CLOSE":
+                close_pct = self._settings.risk.partial_tp_pct
+                try:
+                    pnl, closed_qty, new_id = await self._positions.partial_close(
+                        pos["id"], close_pct, price, reason,
+                    )
+                    if not self._paper:
+                        # Partial close on exchange
+                        sz = self._client.round_size(symbol, closed_qty)
+                        if sz > 0:
+                            await self._client.close_position(symbol, sz=sz)
+                    prefix = "[PAPER] " if self._paper else ""
+                    await self._db.insert_trade(
+                        symbol=symbol, side="CLOSE", price=price,
+                        quantity=closed_qty, pnl=pnl,
+                        strategy=pos["strategy"],
+                        notes=f"{prefix}partial_tp: {close_pct:.0f}%",
+                    )
+                    logger.info(
+                        "%sPartial TP %s %s: closed %.6f @ %g PnL=%.4f → remaining #%d",
+                        prefix, direction, symbol, closed_qty, price, pnl, new_id,
+                    )
+                    try:
+                        await self._db.insert_event(
+                            cycle=self._cycle_count, symbol=symbol,
+                            event_type="PARTIAL_TP", source="auto_close",
+                            action="PARTIAL_CLOSE", reasoning=reason,
+                            details={
+                                "price": round(price, 6), "pnl": round(pnl, 4),
+                                "closed_qty": closed_qty, "close_pct": close_pct,
+                                "new_position_id": new_id,
+                                "paper": self._paper,
+                            },
+                            position_id=pos["id"],
+                        )
+                    except Exception:
+                        logger.debug("Failed to log PARTIAL_TP event", exc_info=True)
+                except Exception:
+                    logger.exception("Failed to partial close %s", symbol)
+                continue
+
+            # ── Full CLOSE handling ──
             if self._paper:
-                logger.info("[PAPER] Auto-close %s %s: %s @ %.4f", direction, symbol, reason, price)
+                logger.info("[PAPER] Auto-close %s %s: %s @ %g", direction, symbol, reason, price)
                 pnl = await self._positions.close_position(pos["id"], price, reason)
                 await self._db.insert_trade(
                     symbol=symbol, side="CLOSE", price=price,
@@ -896,7 +1005,7 @@ class Bot:
                         action="CLOSE", symbol=symbol, qty=pos["quantity"], price=price,
                     )
                     logger.info(
-                        "Auto-closed %s %s: %s @ %.4f PnL=%.4f",
+                        "Auto-closed %s %s: %s @ %g PnL=%.4f",
                         direction, symbol, reason, price, pnl,
                     )
                     try:
@@ -972,6 +1081,17 @@ class Bot:
 
         return indicators
 
+    def _write_ai_context_file(self, context_data: dict[str, dict[str, Any]]) -> str:
+        """Write market context data to a JSON file for the AI advisor.
+
+        The file contains market data per symbol, keyed by symbol.
+        price_action_5m is already in [O, H, L, C, V] array format.
+        Returns the absolute path.
+        """
+        ctx_path = Path("data") / "ai_context" / "market_data.json"
+        ctx_path.write_text(json.dumps(context_data, default=str))
+        return str(ctx_path.resolve())
+
     async def _fetch_asset_contexts(self) -> dict[str, dict[str, Any]]:
         """Fetch funding rates, OI, mark prices for all coins (single API call)."""
         try:
@@ -1041,19 +1161,19 @@ class Bot:
         if not price or price <= 0:
             return ctx
 
-        # ── Price action: last 12 candles 5m (~60 min) ──
+        # ── Price action: last 6 candles 5m (~30 min) ──
         candles_5m = self._market_data.get_candles(symbol, "5m")
-        if candles_5m is not None and len(candles_5m) >= 12:
-            last_12 = candles_5m.tail(12)
+        if candles_5m is not None and len(candles_5m) >= 6:
+            last_n = candles_5m.tail(6)
             ctx["price_action_5m"] = [
-                {
-                    "o": round(float(row["open"]), 6),
-                    "h": round(float(row["high"]), 6),
-                    "l": round(float(row["low"]), 6),
-                    "c": round(float(row["close"]), 6),
-                    "v": round(float(row["volume"]), 2),
-                }
-                for _, row in last_12.iterrows()
+                [
+                    round(float(row["open"]), 6),
+                    round(float(row["high"]), 6),
+                    round(float(row["low"]), 6),
+                    round(float(row["close"]), 6),
+                    int(float(row["volume"])),
+                ]
+                for _, row in last_n.iterrows()
             ]
 
         # ── % changes: 1h, 4h, 24h ──
@@ -1108,16 +1228,14 @@ class Bot:
                 trend_4h = "NEUTRAL"
 
             ctx["trend_4h"] = trend_4h
-            ctx["ema12_1h"] = round(ema12_now, 6)
-            ctx["ema26_1h"] = round(ema26_now, 6)
 
-        # ── Order book: top 5 bid/ask levels ──
+        # ── Order book: top 3 bid/ask levels ──
         if order_books and symbol in order_books:
             try:
                 levels = order_books[symbol].get("levels", [])
                 if len(levels) >= 2:
-                    bids = levels[0][:5]
-                    asks = levels[1][:5]
+                    bids = levels[0][:3]
+                    asks = levels[1][:3]
                     ctx["order_book"] = {
                         "bids": [{"price": float(b["px"]), "size": float(b["sz"])} for b in bids],
                         "asks": [{"price": float(a["px"]), "size": float(a["sz"])} for a in asks],
@@ -1131,16 +1249,10 @@ class Bot:
             try:
                 funding = float(actx.get("funding", 0))
                 ctx["funding_rate"] = round(funding, 8)
-                # Annualized for context (funding applied every 8h → 3x/day → 1095x/year)
-                ctx["funding_rate_annualized_pct"] = round(funding * 3 * 365 * 100, 2)
             except (ValueError, TypeError):
                 pass
             try:
                 ctx["open_interest"] = round(float(actx.get("openInterest", 0)), 4)
-            except (ValueError, TypeError):
-                pass
-            try:
-                ctx["mark_price"] = float(actx.get("markPx", 0))
             except (ValueError, TypeError):
                 pass
 
@@ -1191,7 +1303,7 @@ class Bot:
             price = await self._client.get_price(symbol)
 
         logger.info(
-            "[PAPER] Would execute: %s %s size=%.2f%% price=%.4f",
+            "[PAPER] Would execute: %s %s size=%.2f%% price=%g",
             decision.action, symbol, decision.size_pct or 0, price,
         )
 
@@ -1262,7 +1374,7 @@ class Bot:
                         price=price, quantity=qty,
                         strategy="ai_advisor", notes="[PAPER] SCALE_UP",
                     )
-                    logger.info("[PAPER] SCALE_UP %s %s +%.6f @ %.4f", direction, symbol, qty, price)
+                    logger.info("[PAPER] SCALE_UP %s %s +%.6f @ %g", direction, symbol, qty, price)
                     try:
                         await self._db.insert_event(
                             cycle=self._cycle_count, symbol=symbol,
@@ -1352,7 +1464,7 @@ class Bot:
             action=action_name, symbol=symbol, qty=qty, price=price,
         )
         logger.info(
-            "%s executed: %s qty=%.6f price=%.4f SL=%.4f TP=%.4f lev=%dx",
+            "%s executed: %s qty=%.6f price=%g SL=%g TP=%g lev=%dx",
             action_name, symbol, qty, price,
             decision.stop_loss or 0, decision.take_profit or 0, leverage,
         )
@@ -1426,7 +1538,7 @@ class Bot:
             action="SCALE_UP", symbol=symbol, qty=qty, price=price,
         )
         logger.info(
-            "SCALE_UP executed: %s %s +%.6f @ %.4f lev=%dx",
+            "SCALE_UP executed: %s %s +%.6f @ %g lev=%dx",
             direction, symbol, qty, price, leverage,
         )
         try:
@@ -1480,7 +1592,7 @@ class Bot:
             qty=pos["quantity"] if pos else 0, price=fill_price,
         )
         logger.info(
-            "CLOSE executed: %s @ %.4f PnL=%s",
+            "CLOSE executed: %s @ %g PnL=%s",
             symbol, fill_price,
             f"{pnl:.4f}" if pnl is not None else "N/A",
         )
@@ -1532,9 +1644,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--once", action="store_true", help="Run one cycle then exit")
     parser.add_argument(
         "--strategy",
-        choices=["multi", "mean_reversion", "rsi_div"],
+        choices=["multi", "mean_reversion", "rsi_div", "trend_following"],
         default="multi",
-        help="Strategy mode: multi (default), mean_reversion, rsi_div",
+        help="Strategy mode: multi (default), mean_reversion, rsi_div, trend_following",
     )
     return parser.parse_args()
 

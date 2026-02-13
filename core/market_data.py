@@ -53,9 +53,9 @@ class MarketData:
         self._client = client
         self._settings = settings
 
-        # Mid prices for all assets — updated via WS
+        # Mid prices for all assets — refreshed via REST (WS allMids disabled: unreliable)
         self._mid_prices: dict[str, float] = {}
-        self._mid_updated_at: float = 0.0  # last WS update timestamp
+        self._mid_updated_at: float = 0.0
         self._mid_lock = threading.Lock()
 
         # OHLCV candles per (coin, interval)
@@ -108,7 +108,11 @@ class MarketData:
         )
         logger.info("Loaded initial candles: %d/%d coin-interval combos", loaded, len(load_tasks))
 
-        # Start WebSocket subscriptions via SDK (runs in background thread)
+        # Initial mid prices via REST
+        n_mids = await self.refresh_mid_prices()
+        logger.info("Loaded initial mid prices: %d coins via REST", n_mids)
+
+        # Start WebSocket subscriptions for candles (allMids disabled — uses REST)
         await self._start_ws_subscriptions(coins, intervals)
 
         logger.info(
@@ -125,27 +129,8 @@ class MarketData:
             lambda: __import__('hyperliquid.info', fromlist=['Info']).Info(api_url, skip_ws=False)
         )
 
-        # Subscribe to allMids (single stream for all mid prices)
-        def _on_all_mids(ws_msg: dict[str, Any]) -> None:
-            if not self._running:
-                return
-            # SDK passes full ws_msg: {"channel": "allMids", "data": {"mids": {...}}}
-            inner = ws_msg.get("data", ws_msg)
-            mids = inner.get("mids", {})
-            with self._mid_lock:
-                for coin, price_str in mids.items():
-                    try:
-                        self._mid_prices[coin] = float(price_str)
-                    except (ValueError, TypeError):
-                        pass
-                if mids:
-                    self._mid_updated_at = time.time()
-
-        await asyncio.to_thread(
-            self._ws_info.subscribe,
-            {"type": "allMids"},
-            _on_all_mids,
-        )
+        # WS allMids disabled — unreliable (phantom price spikes observed).
+        # Mid prices are now refreshed via REST: refresh_mid_prices().
 
         # Subscribe to candle streams for each coin/interval
         for coin in coins:
@@ -253,13 +238,29 @@ class MarketData:
 
     # ── Data access ─────────────────────────────────────────
 
+    async def refresh_mid_prices(self) -> int:
+        """Fetch all mid prices via REST and update the cache.
+
+        Called by the main tick (~60s) and SL/TP monitor (~20s).
+        Returns the number of prices updated.
+        """
+        try:
+            mids = await self._client.get_all_mids()
+            with self._mid_lock:
+                self._mid_prices = mids
+                self._mid_updated_at = time.time()
+            return len(mids)
+        except Exception:
+            logger.warning("Failed to refresh mid prices via REST")
+            return 0
+
     def get_mid_price(self, coin: str) -> float | None:
-        """Get latest mid price for a coin (from WS stream)."""
+        """Get latest mid price for a coin (from REST cache)."""
         with self._mid_lock:
             return self._mid_prices.get(coin)
 
     def is_price_stale(self, max_age_seconds: float = 120.0) -> bool:
-        """Check if WS mid prices haven't been updated recently."""
+        """Check if mid prices haven't been refreshed recently."""
         with self._mid_lock:
             if self._mid_updated_at == 0:
                 return True
