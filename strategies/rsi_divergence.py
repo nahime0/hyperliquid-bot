@@ -269,7 +269,7 @@ class RSIDivergenceStrategy(Strategy):
         decisions: list[Decision] = []
         open_symbols = await self._positions.get_open_symbols()
 
-        # EXIT checks on open positions
+        # EXIT checks (only on positions opened by this strategy)
         for symbol in list(open_symbols):
             sig = self._signals.get(symbol)
             if not sig or sig.rsi is None:
@@ -277,6 +277,9 @@ class RSIDivergenceStrategy(Strategy):
 
             pos = await self._positions.get_position_for_symbol(symbol)
             if not pos:
+                continue
+
+            if pos.get("strategy") != "rsi_divergence":
                 continue
 
             direction = pos.get("direction", "LONG")

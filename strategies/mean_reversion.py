@@ -25,6 +25,7 @@ Hard blocks (always reject, bypass scoring):
   - |funding| >= 0.001 (extreme funding)
   - Global cooldown active (3+ consecutive losses)
   - Fresh per-symbol cooldown (loss < 10 min ago)
+  - Trend filter: BEARISH blocks LONG, BULLISH blocks SHORT (NEUTRAL allowed)
 
 Exit (ANY trigger, unchanged):
   - LONG: RSI > 65 or price >= upper BB
@@ -286,7 +287,7 @@ class MeanReversionStrategy(Strategy):
 
         open_symbols = await self._positions.get_open_symbols()
 
-        # ── EXIT checks (on open positions) ──
+        # ── EXIT checks (only on positions opened by this strategy) ──
         for symbol in list(open_symbols):
             sig = self._signals.get(symbol)
             if not sig:
@@ -294,6 +295,9 @@ class MeanReversionStrategy(Strategy):
 
             pos = await self._positions.get_position_for_symbol(symbol)
             if not pos:
+                continue
+
+            if pos.get("strategy") != "mean_reversion":
                 continue
 
             direction = pos.get("direction", "LONG")
@@ -402,17 +406,27 @@ class MeanReversionStrategy(Strategy):
                 logger.debug("[MR LONG] %s → HARD BLOCK: fresh cooldown (%ds ago)", symbol, int(time_since))
                 return None
 
-        # ── Scoring ──────────────────────────────────────────
+        # ── Trend hard block ───────────────────────────────────
+        if sig.trend == "BEARISH":
+            logger.debug("[MR LONG] %s → HARD BLOCK: trend is BEARISH", symbol)
+            return None
+
+        # ── Scoring (graduated intensity) ──────────────────────
         score = 0.0
         components: list[str] = []
 
+        # RSI: graduated — deeper oversold scores higher
         if sig.rsi < RSI_OVERSOLD:
-            score += W_RSI
-            components.append(f"RSI={sig.rsi:.1f}<{RSI_OVERSOLD:.0f}")
+            intensity = min(1.0, (RSI_OVERSOLD - sig.rsi) / RSI_OVERSOLD)
+            score += W_RSI * intensity
+            components.append(f"RSI={sig.rsi:.1f}<{RSI_OVERSOLD:.0f}(i={intensity:.2f})")
 
+        # BB: graduated — farther below BB scores higher (floor 0.2)
         if sig.price <= sig.bb_lower * 1.005:
-            score += W_BB
-            components.append("below_BB")
+            bb_distance = sig.bb_lower - sig.price
+            intensity = max(0.2, min(1.0, bb_distance / (sig.bb_lower * 0.01))) if sig.bb_lower > 0 else 0.2
+            score += W_BB * intensity
+            components.append(f"below_BB(i={intensity:.2f})")
 
         if sig.volume_ratio is not None and sig.volume_ratio >= MIN_VOLUME_RATIO:
             score += W_VOLUME
@@ -430,11 +444,11 @@ class MeanReversionStrategy(Strategy):
             score += W_COOLDOWN
             components.append("no_cd")
 
-        score = round(score, 2)
+        score = round(score, 4)
 
         if score < SCORE_THRESHOLD:
             logger.debug(
-                "[MR LONG] %s: score=%.2f < %.2f — RSI=%.1f, BB%%=%.2f, vol=%s, RSI_1h=%s",
+                "[MR LONG] %s: score=%.3f < %.2f — RSI=%.1f, BB%%=%.2f, vol=%s, RSI_1h=%s",
                 symbol, score, SCORE_THRESHOLD, sig.rsi, sig.bb_pct,
                 f"{sig.volume_ratio:.1f}" if sig.volume_ratio else "N/A",
                 f"{sig.rsi_1h:.1f}" if sig.rsi_1h else "N/A",
@@ -444,13 +458,13 @@ class MeanReversionStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
         rsi_1h_str = f"{sig.rsi_1h:.1f}" if sig.rsi_1h is not None else "N/A"
 
-        logger.debug("[MR LONG] %s: score=%.2f — %s", symbol, score, ", ".join(components))
+        logger.debug("[MR LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
         return Decision(
             action="BUY",
             symbol=symbol,
             confidence=score,
             reasoning=(
-                f"[MeanRev LONG] {symbol}: score={score:.2f} — "
+                f"[MeanRev LONG] {symbol}: score={score:.3f} — "
                 f"RSI={sig.rsi:.1f}, BB%={sig.bb_pct:.2f}, "
                 f"vol={vol_str}, RSI_1h={rsi_1h_str}, trend={sig.trend}"
             ),
@@ -482,17 +496,27 @@ class MeanReversionStrategy(Strategy):
                 logger.debug("[MR SHORT] %s → HARD BLOCK: fresh cooldown (%ds ago)", symbol, int(time_since))
                 return None
 
-        # ── Scoring ──────────────────────────────────────────
+        # ── Trend hard block ───────────────────────────────────
+        if sig.trend == "BULLISH":
+            logger.debug("[MR SHORT] %s → HARD BLOCK: trend is BULLISH", symbol)
+            return None
+
+        # ── Scoring (graduated intensity) ──────────────────────
         score = 0.0
         components: list[str] = []
 
+        # RSI: graduated — deeper overbought scores higher
         if sig.rsi > RSI_OVERBOUGHT_ENTRY:
-            score += W_RSI
-            components.append(f"RSI={sig.rsi:.1f}>{RSI_OVERBOUGHT_ENTRY:.0f}")
+            intensity = min(1.0, (sig.rsi - RSI_OVERBOUGHT_ENTRY) / (100 - RSI_OVERBOUGHT_ENTRY))
+            score += W_RSI * intensity
+            components.append(f"RSI={sig.rsi:.1f}>{RSI_OVERBOUGHT_ENTRY:.0f}(i={intensity:.2f})")
 
+        # BB: graduated — farther above BB scores higher (floor 0.2)
         if sig.price >= sig.bb_upper * 0.995:
-            score += W_BB
-            components.append("above_BB")
+            bb_distance = sig.price - sig.bb_upper
+            intensity = max(0.2, min(1.0, bb_distance / (sig.bb_upper * 0.01))) if sig.bb_upper > 0 else 0.2
+            score += W_BB * intensity
+            components.append(f"above_BB(i={intensity:.2f})")
 
         if sig.volume_ratio is not None and sig.volume_ratio >= MIN_VOLUME_RATIO:
             score += W_VOLUME
@@ -510,11 +534,11 @@ class MeanReversionStrategy(Strategy):
             score += W_COOLDOWN
             components.append("no_cd")
 
-        score = round(score, 2)
+        score = round(score, 4)
 
         if score < SCORE_THRESHOLD:
             logger.debug(
-                "[MR SHORT] %s: score=%.2f < %.2f — RSI=%.1f, BB%%=%.2f, vol=%s, RSI_1h=%s",
+                "[MR SHORT] %s: score=%.3f < %.2f — RSI=%.1f, BB%%=%.2f, vol=%s, RSI_1h=%s",
                 symbol, score, SCORE_THRESHOLD, sig.rsi, sig.bb_pct,
                 f"{sig.volume_ratio:.1f}" if sig.volume_ratio else "N/A",
                 f"{sig.rsi_1h:.1f}" if sig.rsi_1h else "N/A",
@@ -524,13 +548,13 @@ class MeanReversionStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
         rsi_1h_str = f"{sig.rsi_1h:.1f}" if sig.rsi_1h is not None else "N/A"
 
-        logger.debug("[MR SHORT] %s: score=%.2f — %s", symbol, score, ", ".join(components))
+        logger.debug("[MR SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
         return Decision(
             action="SHORT",
             symbol=symbol,
             confidence=score,
             reasoning=(
-                f"[MeanRev SHORT] {symbol}: score={score:.2f} — "
+                f"[MeanRev SHORT] {symbol}: score={score:.3f} — "
                 f"RSI={sig.rsi:.1f}, BB%={sig.bb_pct:.2f}, "
                 f"vol={vol_str}, RSI_1h={rsi_1h_str}, trend={sig.trend}"
             ),

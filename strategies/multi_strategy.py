@@ -4,9 +4,10 @@ NOT a voting system (like CombinedRule in backtest). Each sub-strategy produces
 its own Decision objects independently. The merger unifies them per coin:
 
   - 2+ strategies agree on BUY/SHORT → boost confidence +0.1
-  - Strategies conflict (BUY vs SHORT on same coin) → skip coin
+  - Strategies conflict (BUY vs SHORT on same coin) → highest score wins,
+    conflict noted in reasoning so the AI advisor knows there's disagreement
   - Only 1 strategy signals → use original confidence
-  - Never more than max_open_positions decisions per cycle
+  - Entries sorted by confidence (highest first), no cap at this stage
 """
 from __future__ import annotations
 
@@ -25,13 +26,8 @@ _AGREEMENT_BOOST = 0.1
 class MultiStrategy(Strategy):
     """Aggregates decisions from multiple sub-strategies."""
 
-    def __init__(
-        self,
-        strategies: list[Strategy],
-        max_decisions: int = 5,
-    ) -> None:
+    def __init__(self, strategies: list[Strategy]) -> None:
         self._strategies = strategies
-        self._max_decisions = max_decisions
 
     def set_cycle(self, cycle: int) -> None:
         for s in self._strategies:
@@ -99,11 +95,30 @@ class MultiStrategy(Strategy):
         for coin, coin_decisions in entries_by_coin.items():
             actions = {d.action for d in coin_decisions}
 
-            # Conflict: BUY and SHORT on same coin → skip
+            # Conflict: BUY and SHORT on same coin → highest score wins
             if "BUY" in actions and "SHORT" in actions:
+                best = max(coin_decisions, key=lambda d: d.confidence)
+                loser = min(coin_decisions, key=lambda d: d.confidence)
+                best = Decision(
+                    action=best.action,
+                    symbol=best.symbol,
+                    confidence=best.confidence,
+                    reasoning=(
+                        f"[Conflict: {best.strategy_type} {best.action} wins over "
+                        f"{loser.strategy_type} {loser.action} ({loser.confidence:.2f})] "
+                        f"{best.reasoning}"
+                    ),
+                    strategy_type=best.strategy_type,
+                    size_pct=best.size_pct,
+                    order_type=best.order_type,
+                    stop_loss=best.stop_loss,
+                    take_profit=best.take_profit,
+                )
+                merged_entries.append(best)
                 logger.info(
-                    "MultiStrategy conflict on %s: BUY vs SHORT — skipping",
-                    coin,
+                    "MultiStrategy conflict on %s: %s %s (%.2f) wins over %s %s (%.2f)",
+                    coin, best.strategy_type, best.action, best.confidence,
+                    loser.strategy_type, loser.action, loser.confidence,
                 )
                 continue
 
@@ -131,9 +146,8 @@ class MultiStrategy(Strategy):
 
             merged_entries.append(best)
 
-        # Sort entries by confidence (descending), cap to max_decisions
+        # Sort entries by confidence (descending)
         merged_entries.sort(key=lambda d: d.confidence, reverse=True)
-        merged_entries = merged_entries[:self._max_decisions]
 
         return merged_exits + merged_entries
 
