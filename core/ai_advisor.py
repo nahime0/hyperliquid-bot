@@ -1,17 +1,11 @@
-"""AI Advisor — Claude Code CLI integration for trading decisions.
+"""AI Advisor — CLI integration for trading decisions.
 
-Single CLI call per cycle. The AI acts as an advisor that reviews open positions
-and proposed opportunities, responding with structured JSON.
+Supports two backends (selected via AIConfig.advisor):
+  - "claude": Claude Code CLI with --json-schema for structured output
+  - "cursor": Cursor Agent CLI with schema embedded in prompt
 
-Invocation:
-    claude -p <payload_file> \
-        --no-session-persistence \
-        --model <model> \
-        --output-format json \
-        --json-schema <schema> \
-        --system-prompt-file prompts/ai_advisor.md \
-        --allowedTools "" \
-        --max-turns 2
+Single CLI call per cycle. The AI reviews all positions and opportunities
+together, responding with structured JSON.
 
 On error: logs a warning and returns empty response (bot continues autonomously).
 """
@@ -19,11 +13,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import tempfile
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from config.settings import AIConfig
+from core.cli_claude import invoke_claude_cli
+from core.cli_cursor import invoke_cursor_cli
 from data.db import Database
 from utils.logger import get_logger
 
@@ -44,21 +41,31 @@ class DeferredOpportunity:
 
 
 class AIAdvisor:
-    """Claude Code CLI advisor for trading decisions."""
+    """CLI advisor for trading decisions (Claude or Cursor backend)."""
 
     def __init__(
         self,
         *,
-        model: str = "opus",
-        timeout: int = 120,
+        config: AIConfig | None = None,
+        model: str = "sonnet",
+        timeout: int = 180,
         db: Database | None = None,
     ) -> None:
-        self._model = model
-        self._timeout = timeout
+        if config is not None:
+            self._advisor = config.advisor
+            self._model = config.model
+            self._timeout = config.timeout
+        else:
+            self._advisor = "claude"
+            self._model = model
+            self._timeout = timeout
         self._db = db
         self._schema_path = _PROJECT_ROOT / "schemas" / "ai_advisor_output.json"
         self._prompt_path = _PROJECT_ROOT / "prompts" / "ai_advisor.md"
         self._cycle_count: int = 0
+
+        # Build clean env for subprocess
+        self._env = os.environ.copy()
 
         # Deferred opportunities (in-memory, synced to DB when available)
         self._deferred: dict[str, DeferredOpportunity] = {}
@@ -74,6 +81,11 @@ class AIAdvisor:
     def deferred_hold_symbols(self) -> set[str]:
         """Symbols with deferred position holds."""
         return set(self._deferred_holds.keys())
+
+    def get_deferred_action(self, symbol: str) -> str | None:
+        """Get the original action (BUY/SHORT) of a deferred opportunity."""
+        opp = self._deferred.get(symbol)
+        return opp.original_action if opp else None
 
     def set_cycle(self, cycle: int) -> None:
         """Update the current cycle count (called from main loop)."""
@@ -219,11 +231,7 @@ class AIAdvisor:
     # ── Deferred summary (for AI context) ────────────────────
 
     def get_deferred_summary(self) -> list[dict[str, Any]]:
-        """Build a structured summary of all deferred items for the AI payload.
-
-        Returns a list of dicts with: symbol, action, deferred_since_cycles,
-        and the original conditions.
-        """
+        """Build a structured summary of all deferred items for the AI payload."""
         items: list[dict[str, Any]] = []
         for sym, opp in self._deferred.items():
             age = self._cycle_count - opp.deferred_at_cycle
@@ -266,6 +274,7 @@ class AIAdvisor:
         positions: list[dict[str, Any]],
         opportunities: list[dict[str, Any]],
         account: dict[str, Any],
+        market_data: dict[str, dict[str, Any]] | None = None,
         recent_trades: list[dict[str, Any]] | None = None,
         trade_stats: dict[str, Any] | None = None,
         deferred: list[dict[str, Any]] | None = None,
@@ -275,11 +284,17 @@ class AIAdvisor:
         Returns dict with "positions" and "opportunities" keys, each a list of actions.
         On error, returns empty lists.
         """
-        payload = {
+        # Early return if nothing to review
+        if not positions and not opportunities:
+            return {"positions": [], "opportunities": []}
+
+        payload: dict[str, Any] = {
             "positions": positions,
             "opportunities": opportunities,
             "account": account,
         }
+        if market_data:
+            payload["market_data"] = market_data
         if recent_trades:
             payload["recent_trades"] = recent_trades
         if trade_stats:
@@ -288,13 +303,15 @@ class AIAdvisor:
             payload["deferred"] = deferred
 
         payload_json = json.dumps(payload, default=str)
+        logger.info("AI payload: %.1f KB (%d pos, %d opp) — %s/%s",
+                    len(payload_json) / 1024, len(positions), len(opportunities),
+                    self._advisor, self._model)
 
         try:
-            result = await asyncio.wait_for(
+            return await asyncio.wait_for(
                 self._invoke_cli(payload_json),
                 timeout=self._timeout,
             )
-            return result
         except asyncio.TimeoutError:
             logger.warning("AI advisor timed out after %ds — continuing autonomously", self._timeout)
             return {"positions": [], "opportunities": []}
@@ -303,110 +320,101 @@ class AIAdvisor:
             return {"positions": [], "opportunities": []}
 
     async def _invoke_cli(self, payload_json: str) -> dict[str, Any]:
-        """Invoke claude CLI and parse the structured output."""
-        schema_content = self._schema_path.read_text()
+        """Invoke the configured CLI backend and parse the structured output."""
+        kwargs = dict(
+            payload_json=payload_json,
+            model=self._model,
+            timeout=self._timeout,
+            schema_path=self._schema_path,
+            prompt_path=self._prompt_path,
+            env=self._env,
+        )
 
-        # Write payload to a temp file to avoid shell argument length limits
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", prefix="ai_advisor_", delete=False,
-            dir="/tmp/claude",
-        ) as f:
-            f.write(payload_json)
-            payload_file = f.name
+        if self._advisor == "cursor":
+            result = await invoke_cursor_cli(**kwargs)
+        else:
+            result = await invoke_claude_cli(**kwargs)
 
-        try:
-            # Build the prompt that references the payload
-            prompt = f"Review the following trading state and provide your decisions:\n\n{payload_json}"
+        if not isinstance(result, dict):
+            logger.warning("AI advisor returned non-dict: %s", type(result))
+            return {"positions": [], "opportunities": []}
 
-            cmd = [
-                "claude",
-                "-p", prompt,
-                "--no-session-persistence",
-                "--model", self._model,
-                "--output-format", "json",
-                "--json-schema", schema_content,
-                "--system-prompt-file", str(self._prompt_path),
-                "--allowedTools", "",
-                "--max-turns", "2",
-            ]
+        result = _validate_response(result)
 
-            logger.debug("Invoking AI advisor CLI (model=%s)", self._model)
+        positions_resp = result.get("positions", [])
+        opportunities_resp = result.get("opportunities", [])
 
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
+        logger.info("AI advisor responded: %d position actions, %d opportunity actions",
+                    len(positions_resp), len(opportunities_resp))
 
-            if proc.returncode != 0:
-                stderr_text = stderr.decode(errors="replace").strip()
-                logger.warning(
-                    "AI advisor CLI exited with code %d: %s",
-                    proc.returncode, stderr_text[:500],
-                )
-                return {"positions": [], "opportunities": []}
+        for pa in positions_resp:
+            logger.info("  Position %s: %s — %s",
+                        pa.get("symbol"), pa.get("action"), pa.get("reasoning", ""))
+        for oa in opportunities_resp:
+            logger.info("  Opportunity %s: %s — %s",
+                        oa.get("symbol"), oa.get("action"), oa.get("reasoning", ""))
 
-            output = stdout.decode(errors="replace").strip()
-            if not output:
-                logger.warning("AI advisor returned empty output")
-                return {"positions": [], "opportunities": []}
+        return result
 
-            # Parse the JSON output
-            response = json.loads(output)
 
-            # claude --output-format json wraps result in {"result": ..., "structured_output": ...}
-            # The structured_output contains our schema-validated response
-            if isinstance(response, dict):
-                if "structured_output" in response:
-                    result = response["structured_output"]
-                elif "result" in response:
-                    # Try to parse result as JSON (might be a JSON string)
-                    result_val = response["result"]
-                    if isinstance(result_val, str):
-                        try:
-                            result = json.loads(result_val)
-                        except json.JSONDecodeError:
-                            result = response
-                    elif isinstance(result_val, dict):
-                        result = result_val
-                    else:
-                        result = response
-                else:
-                    result = response
-            else:
-                result = response
+_VALID_POSITION_ACTIONS = {"HOLD", "CLOSE", "ADJUST", "SCALE_UP"}
+_VALID_OPPORTUNITY_ACTIONS = {"BUY", "SHORT", "HOLD"}
 
-            # Validate structure
-            if not isinstance(result, dict):
-                logger.warning("AI advisor returned non-dict: %s", type(result))
-                return {"positions": [], "opportunities": []}
 
-            positions_resp = result.get("positions", [])
-            opportunities_resp = result.get("opportunities", [])
+def _validate_response(resp: dict[str, Any]) -> dict[str, Any]:
+    """Validate and sanitize the AI response structure.
 
-            logger.info(
-                "AI advisor responded: %d position actions, %d opportunity actions",
-                len(positions_resp), len(opportunities_resp),
-            )
+    Ensures 'positions' and 'opportunities' are lists of dicts with
+    required keys (symbol, action, reasoning).  Drops malformed items.
+    """
+    validated: dict[str, Any] = {}
 
-            # Log reasoning
-            for pa in positions_resp:
-                logger.info(
-                    "  Position %s: %s — %s",
-                    pa.get("symbol"), pa.get("action"), pa.get("reasoning", ""),
-                )
-            for oa in opportunities_resp:
-                logger.info(
-                    "  Opportunity %s: %s — %s",
-                    oa.get("symbol"), oa.get("action"), oa.get("reasoning", ""),
-                )
+    # -- positions --
+    raw_pos = resp.get("positions")
+    if not isinstance(raw_pos, list):
+        raw_pos = []
+    good_pos: list[dict[str, Any]] = []
+    for item in raw_pos:
+        if not isinstance(item, dict):
+            continue
+        sym = item.get("symbol")
+        action = item.get("action")
+        if not sym or not isinstance(sym, str):
+            continue
+        if action not in _VALID_POSITION_ACTIONS:
+            logger.warning("Dropping position item: invalid action '%s' for %s", action, sym)
+            continue
+        if "reasoning" not in item:
+            item["reasoning"] = ""
+        good_pos.append(item)
+    validated["positions"] = good_pos
 
-            return result
+    # -- opportunities --
+    raw_opp = resp.get("opportunities")
+    if not isinstance(raw_opp, list):
+        raw_opp = []
+    good_opp: list[dict[str, Any]] = []
+    for item in raw_opp:
+        if not isinstance(item, dict):
+            continue
+        sym = item.get("symbol")
+        action = item.get("action")
+        if not sym or not isinstance(sym, str):
+            continue
+        if action not in _VALID_OPPORTUNITY_ACTIONS:
+            logger.warning("Dropping opportunity item: invalid action '%s' for %s", action, sym)
+            continue
+        if "reasoning" not in item:
+            item["reasoning"] = ""
+        good_opp.append(item)
+    validated["opportunities"] = good_opp
 
-        finally:
-            # Clean up temp file
-            try:
-                Path(payload_file).unlink(missing_ok=True)
-            except Exception:
-                pass
+    dropped_pos = len(raw_pos) - len(good_pos)
+    dropped_opp = len(raw_opp) - len(good_opp)
+    if dropped_pos or dropped_opp:
+        logger.warning(
+            "Validation dropped %d position(s), %d opportunity(s) from AI response",
+            dropped_pos, dropped_opp,
+        )
+
+    return validated

@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import json
-from unittest.mock import AsyncMock, patch, MagicMock
+import subprocess
+from unittest.mock import patch
 
 import pytest
 import pytest_asyncio
 
-from core.ai_advisor import AIAdvisor
+from config.settings import AIConfig
+from core.ai_advisor import AIAdvisor, _validate_response
+from core.cli_cursor import _strip_markdown_fences
 
 
 # ── Deferred opportunity tracking ───────────────────────────
@@ -299,194 +302,503 @@ class TestDeferredPersistence:
 # ── CLI invocation (mocked) ─────────────────────────────────
 
 
-def _make_mock_process(stdout: str, returncode: int = 0, stderr: str = ""):
-    proc = AsyncMock()
-    proc.communicate = AsyncMock(
-        return_value=(stdout.encode(), stderr.encode())
-    )
-    proc.returncode = returncode
-    return proc
+def _mock_run_factory(stdout: str, returncode: int = 0, stderr: str = ""):
+    """Return a callable that returns a CompletedProcess (for side_effect)."""
+    result = subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
+    def mock_run(*args, **kwargs):
+        return result
+    return mock_run
 
 
 class TestConsultMocked:
     @pytest.mark.asyncio
     async def test_consult_returns_structured_output(self):
-        response = {
-            "result": "some text",
-            "structured_output": {
-                "positions": [{"symbol": "ETH", "action": "HOLD", "reasoning": "ok"}],
-                "opportunities": [],
-            },
+        """Single CLI call returns batch response with positions and opportunities."""
+        batch = {
+            "positions": [{"symbol": "ETH", "action": "HOLD", "reasoning": "ok"}],
+            "opportunities": [],
         }
-        proc = _make_mock_process(json.dumps(response))
+        response = {"result": "text", "structured_output": batch}
 
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
+        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory(json.dumps(response))):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
-                positions=[{"symbol": "ETH"}],
+                positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 1.0}],
                 opportunities=[],
                 account={"balance_usdc": 1000},
             )
 
         assert len(result["positions"]) == 1
         assert result["positions"][0]["action"] == "HOLD"
+        assert result["positions"][0]["symbol"] == "ETH"
         assert result["opportunities"] == []
 
     @pytest.mark.asyncio
     async def test_consult_handles_timeout(self):
-        async def slow_exec(*args, **kwargs):
-            await asyncio.sleep(10)
+        def slow_run(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
 
-        with patch("asyncio.create_subprocess_exec", side_effect=slow_exec):
-            advisor = AIAdvisor(model="haiku", timeout=0.01)
+        with patch("core.cli_claude.subprocess.run", side_effect=slow_run):
+            advisor = AIAdvisor(model="haiku", timeout=1)
             result = await advisor.consult(
-                positions=[], opportunities=[], account={"balance_usdc": 1000}
+                positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
+                opportunities=[], account={"balance_usdc": 1000}
             )
 
         assert result == {"positions": [], "opportunities": []}
 
     @pytest.mark.asyncio
     async def test_consult_handles_cli_error(self):
-        proc = _make_mock_process("", returncode=1, stderr="CLI error")
-
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
+        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory("", returncode=1, stderr="CLI error")):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
-                positions=[], opportunities=[], account={"balance_usdc": 1000}
+                positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
+                opportunities=[], account={"balance_usdc": 1000}
             )
 
         assert result == {"positions": [], "opportunities": []}
 
     @pytest.mark.asyncio
-    async def test_consult_handles_empty_output(self):
-        proc = _make_mock_process("")
+    async def test_consult_batch_response(self):
+        """Batch response with multiple positions and opportunities."""
+        batch = {
+            "positions": [],
+            "opportunities": [
+                {"symbol": "BTC", "action": "SHORT", "reasoning": "bearish"},
+                {"symbol": "ETH", "action": "SHORT", "reasoning": "bearish"},
+            ],
+        }
+        response = {"structured_output": batch}
 
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
+        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory(json.dumps(response))):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
-                positions=[], opportunities=[], account={"balance_usdc": 1000}
+                positions=[],
+                opportunities=[
+                    {"symbol": "BTC", "proposed_action": "SHORT", "confidence": 0.75},
+                    {"symbol": "ETH", "proposed_action": "SHORT", "confidence": 0.65},
+                ],
+                account={"balance_usdc": 1000},
+            )
+
+        assert len(result["opportunities"]) == 2
+        assert all(o["action"] == "SHORT" for o in result["opportunities"])
+
+    @pytest.mark.asyncio
+    async def test_consult_empty_returns_empty(self):
+        advisor = AIAdvisor(model="haiku", timeout=10)
+        result = await advisor.consult(
+            positions=[], opportunities=[], account={"balance_usdc": 1000}
+        )
+        assert result == {"positions": [], "opportunities": []}
+
+    @pytest.mark.asyncio
+    async def test_consult_handles_empty_output(self):
+        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory("")):
+            advisor = AIAdvisor(model="haiku", timeout=10)
+            result = await advisor.consult(
+                positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
+                opportunities=[], account={"balance_usdc": 1000}
             )
 
         assert result == {"positions": [], "opportunities": []}
 
     @pytest.mark.asyncio
     async def test_consult_handles_invalid_json(self):
-        proc = _make_mock_process("not json at all")
-
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
+        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory("not json at all")):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
-                positions=[], opportunities=[], account={"balance_usdc": 1000}
+                positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
+                opportunities=[], account={"balance_usdc": 1000}
             )
 
         assert result == {"positions": [], "opportunities": []}
 
     @pytest.mark.asyncio
-    async def test_consult_skips_if_nothing(self):
-        response = {"positions": [], "opportunities": []}
-        proc = _make_mock_process(json.dumps(response))
-
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
-            advisor = AIAdvisor(model="haiku", timeout=10)
-            result = await advisor.consult(
-                positions=[], opportunities=[], account={"balance_usdc": 1000}
-            )
-
-        assert result["positions"] == []
-        assert result["opportunities"] == []
-
-    @pytest.mark.asyncio
     async def test_consult_passes_recent_trades(self):
-        response = {"positions": [], "opportunities": []}
-        proc = _make_mock_process(json.dumps(response))
+        """Recent trades are included in the payload."""
+        batch = {"positions": [], "opportunities": [{"symbol": "ETH", "action": "BUY", "reasoning": "go"}]}
+        response = {"structured_output": batch}
         trades = [{"symbol": "ETH", "pnl": 5.0}]
 
-        with patch("asyncio.create_subprocess_exec", return_value=proc) as mock_exec:
+        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory(json.dumps(response))) as mock_run:
             advisor = AIAdvisor(model="haiku", timeout=10)
-            result = await advisor.consult(
+            await advisor.consult(
                 positions=[],
-                opportunities=[],
+                opportunities=[{"symbol": "ETH", "proposed_action": "BUY", "confidence": 0.7}],
                 account={"balance_usdc": 1000},
                 recent_trades=trades,
             )
 
-        # Verify the prompt includes recent_trades
-        call_args = mock_exec.call_args
-        prompt_arg = call_args[0][2]  # -p <prompt>
+        call_args = mock_run.call_args
+        cmd_list = call_args[0][0]
+        prompt_arg = cmd_list[2]  # -p <prompt>
         assert "recent_trades" in prompt_arg
 
     @pytest.mark.asyncio
     async def test_consult_parses_structured_output_field(self):
-        response = {
-            "result": "some markdown text",
-            "structured_output": {
-                "positions": [{"symbol": "BTC", "action": "CLOSE", "reasoning": "TP hit"}],
-                "opportunities": [{"symbol": "SOL", "action": "BUY", "reasoning": "dip"}],
-            },
+        """structured_output contains the batch response."""
+        batch = {
+            "positions": [{"symbol": "BTC", "action": "CLOSE", "reasoning": "TP hit"}],
+            "opportunities": [{"symbol": "SOL", "action": "BUY", "reasoning": "go"}],
         }
-        proc = _make_mock_process(json.dumps(response))
+        response = {"result": "some markdown text", "structured_output": batch}
 
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
+        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory(json.dumps(response))):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
-                positions=[{"symbol": "BTC"}],
-                opportunities=[{"symbol": "SOL"}],
+                positions=[{"symbol": "BTC", "direction": "LONG", "pnl_pct": 2.0}],
+                opportunities=[{"symbol": "SOL", "proposed_action": "BUY", "confidence": 0.7}],
                 account={"balance_usdc": 1000},
             )
 
         assert result["positions"][0]["symbol"] == "BTC"
+        assert result["positions"][0]["action"] == "CLOSE"
         assert result["opportunities"][0]["symbol"] == "SOL"
 
     @pytest.mark.asyncio
-    async def test_consult_parses_result_field(self):
-        response = {
-            "result": {
-                "positions": [],
-                "opportunities": [{"symbol": "ETH", "action": "SHORT", "reasoning": "overb."}],
-            }
+    async def test_consult_parses_result_dict(self):
+        batch = {
+            "positions": [],
+            "opportunities": [{"symbol": "ETH", "action": "SHORT", "reasoning": "overb."}],
         }
-        proc = _make_mock_process(json.dumps(response))
+        response = {"result": batch}
 
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
+        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory(json.dumps(response))):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
-                positions=[], opportunities=[{"symbol": "ETH"}],
+                positions=[], opportunities=[{"symbol": "ETH", "proposed_action": "SHORT", "confidence": 0.6}],
                 account={"balance_usdc": 1000},
             )
 
-        assert len(result["opportunities"]) == 1
+        assert result["opportunities"][0]["action"] == "SHORT"
 
     @pytest.mark.asyncio
-    async def test_consult_parses_raw_dict(self):
-        response = {
-            "positions": [{"symbol": "ETH", "action": "HOLD", "reasoning": "stable"}],
-            "opportunities": [],
-        }
-        proc = _make_mock_process(json.dumps(response))
+    async def test_consult_parses_result_json_string(self):
+        """When result is a JSON string (not dict), it should be parsed."""
+        batch = {"positions": [{"symbol": "ETH", "action": "HOLD", "reasoning": "wait"}], "opportunities": []}
+        response = {"result": json.dumps(batch)}
 
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
+        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory(json.dumps(response))):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
-                positions=[{"symbol": "ETH"}],
+                positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
                 opportunities=[],
                 account={"balance_usdc": 1000},
             )
 
         assert result["positions"][0]["action"] == "HOLD"
 
-    @pytest.mark.asyncio
-    async def test_consult_parses_result_json_string(self):
-        """When result is a JSON string (not dict), it should be parsed."""
-        inner = {"positions": [], "opportunities": []}
-        response = {"result": json.dumps(inner)}
-        proc = _make_mock_process(json.dumps(response))
 
-        with patch("asyncio.create_subprocess_exec", return_value=proc):
-            advisor = AIAdvisor(model="haiku", timeout=10)
+# ── Markdown fence stripping (cursor backend) ─────────────
+
+
+class TestStripMarkdownFences:
+    def test_json_fence(self):
+        text = '```json\n{"positions": [], "opportunities": []}\n```'
+        assert json.loads(_strip_markdown_fences(text)) == {"positions": [], "opportunities": []}
+
+    def test_plain_fence(self):
+        text = '```\n{"positions": []}\n```'
+        assert json.loads(_strip_markdown_fences(text)) == {"positions": []}
+
+    def test_JSON_uppercase_fence(self):
+        text = '```JSON\n{"positions": []}\n```'
+        assert json.loads(_strip_markdown_fences(text)) == {"positions": []}
+
+    def test_text_before_and_after_fence(self):
+        text = 'Here is my response:\n\n```json\n{"positions": [], "opportunities": []}\n```\n\nHope this helps!'
+        result = json.loads(_strip_markdown_fences(text))
+        assert result == {"positions": [], "opportunities": []}
+
+    def test_no_fence_raw_json(self):
+        text = '{"positions": [], "opportunities": []}'
+        assert json.loads(_strip_markdown_fences(text)) == {"positions": [], "opportunities": []}
+
+    def test_no_fence_with_preamble(self):
+        text = 'Here is the JSON:\n{"positions": [], "opportunities": []}'
+        result = json.loads(_strip_markdown_fences(text))
+        assert result == {"positions": [], "opportunities": []}
+
+    def test_no_fence_with_postamble(self):
+        text = '{"positions": [], "opportunities": []}\nDone.'
+        result = json.loads(_strip_markdown_fences(text))
+        assert result == {"positions": [], "opportunities": []}
+
+    def test_nested_braces(self):
+        text = 'blah {"positions": [{"symbol": "ETH", "action": "HOLD", "reasoning": "ok"}], "opportunities": []} blah'
+        result = json.loads(_strip_markdown_fences(text))
+        assert result["positions"][0]["symbol"] == "ETH"
+
+    def test_empty_string(self):
+        assert _strip_markdown_fences("") == ""
+
+    def test_no_json_at_all(self):
+        text = "Just some plain text without any JSON"
+        # Should return stripped text (will fail json.loads but that's caller's job)
+        assert _strip_markdown_fences(text) == text.strip()
+
+
+# ── Cursor backend (mocked) ──────────────────────────────
+
+
+def _cursor_wrapper(inner, *, is_error: bool = False, fences: bool = False, preamble: str = "") -> str:
+    """Build a realistic cursor agent JSON output wrapper."""
+    if isinstance(inner, dict):
+        result_str = json.dumps(inner)
+    else:
+        result_str = inner
+    if fences:
+        result_str = f"```json\n{result_str}\n```"
+    if preamble:
+        result_str = f"{preamble}\n\n{result_str}"
+    wrapper = {
+        "type": "result",
+        "subtype": "error_model" if is_error else "success",
+        "is_error": is_error,
+        "duration_ms": 3000,
+        "duration_api_ms": 3000,
+        "result": result_str,
+        "session_id": "test-session",
+        "request_id": "test-request",
+    }
+    return json.dumps(wrapper)
+
+
+class TestConsultCursor:
+    @pytest.mark.asyncio
+    async def test_cursor_result_wrapper(self):
+        """Cursor wraps output in full wrapper with subtype/is_error/duration."""
+        inner = {"positions": [], "opportunities": [{"symbol": "BTC", "action": "SHORT", "reasoning": "trend"}]}
+        stdout = _cursor_wrapper(inner)
+
+        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(stdout)):
+            advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="opus-4.6-thinking", timeout=10))
             result = await advisor.consult(
-                positions=[], opportunities=[],
+                positions=[],
+                opportunities=[{"symbol": "BTC", "proposed_action": "SHORT", "confidence": 0.8}],
                 account={"balance_usdc": 1000},
             )
 
+        assert len(result["opportunities"]) == 1
+        assert result["opportunities"][0]["action"] == "SHORT"
+
+    @pytest.mark.asyncio
+    async def test_cursor_result_with_markdown_fences(self):
+        """Cursor result string wrapped in markdown fences (thinking models)."""
+        inner = {"positions": [{"symbol": "ETH", "action": "CLOSE", "reasoning": "reversal"}], "opportunities": []}
+        stdout = _cursor_wrapper(inner, fences=True)
+
+        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(stdout)):
+            advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=10))
+            result = await advisor.consult(
+                positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": -1.0}],
+                opportunities=[],
+                account={"balance_usdc": 1000},
+            )
+
+        assert result["positions"][0]["action"] == "CLOSE"
+
+    @pytest.mark.asyncio
+    async def test_cursor_result_with_commentary_around_fences(self):
+        """Cursor adds text before/after fences."""
+        inner = {"positions": [], "opportunities": [{"symbol": "SOL", "action": "BUY", "reasoning": "oversold"}]}
+        stdout = _cursor_wrapper(inner, fences=True, preamble="Based on analysis:")
+
+        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(stdout)):
+            advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=10))
+            result = await advisor.consult(
+                positions=[],
+                opportunities=[{"symbol": "SOL", "proposed_action": "BUY", "confidence": 0.7}],
+                account={"balance_usdc": 1000},
+            )
+
+        assert result["opportunities"][0]["symbol"] == "SOL"
+        assert result["opportunities"][0]["action"] == "BUY"
+
+    @pytest.mark.asyncio
+    async def test_cursor_result_dict_not_string(self):
+        """Cursor returns result as dict directly (no string wrapping)."""
+        inner = {"positions": [], "opportunities": []}
+        # Build wrapper manually since _cursor_wrapper stringifies
+        wrapper = json.dumps({
+            "type": "result", "subtype": "success", "is_error": False,
+            "result": inner, "session_id": "t", "request_id": "t",
+        })
+
+        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(wrapper)):
+            advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=10))
+            result = await advisor.consult(
+                positions=[],
+                opportunities=[{"symbol": "X", "proposed_action": "BUY", "confidence": 0.5}],
+                account={"balance_usdc": 100},
+            )
+
+        assert result == {"positions": [], "opportunities": []}
+
+    @pytest.mark.asyncio
+    async def test_cursor_is_error_true(self):
+        """Cursor returns is_error: true — graceful fallback."""
+        stdout = _cursor_wrapper("Model error: rate limited", is_error=True)
+
+        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(stdout)):
+            advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=10))
+            result = await advisor.consult(
+                positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
+                opportunities=[],
+                account={"balance_usdc": 1000},
+            )
+
+        assert result == {"positions": [], "opportunities": []}
+
+    @pytest.mark.asyncio
+    async def test_cursor_unparseable_result(self):
+        """Cursor returns garbage in result string — graceful fallback."""
+        stdout = _cursor_wrapper("I'm not sure what to do here, let me think...")
+
+        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(stdout)):
+            advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=10))
+            result = await advisor.consult(
+                positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
+                opportunities=[],
+                account={"balance_usdc": 1000},
+            )
+
+        assert result == {"positions": [], "opportunities": []}
+
+    @pytest.mark.asyncio
+    async def test_cursor_timeout(self):
+        def slow(*args, **kwargs):
+            raise subprocess.TimeoutExpired(cmd="agent", timeout=1)
+
+        with patch("core.cli_cursor.subprocess.run", side_effect=slow):
+            advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=1))
+            result = await advisor.consult(
+                positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
+                opportunities=[],
+                account={"balance_usdc": 1000},
+            )
+
+        assert result == {"positions": [], "opportunities": []}
+
+    @pytest.mark.asyncio
+    async def test_cursor_raw_json_no_fences(self):
+        """Cursor returns raw JSON without fences but with preamble text."""
+        inner = {"positions": [], "opportunities": [{"symbol": "BTC", "action": "BUY", "reasoning": "bounce"}]}
+        stdout = _cursor_wrapper(inner, preamble="Here is my analysis:")
+
+        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(stdout)):
+            advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=10))
+            result = await advisor.consult(
+                positions=[],
+                opportunities=[{"symbol": "BTC", "proposed_action": "BUY", "confidence": 0.6}],
+                account={"balance_usdc": 1000},
+            )
+
+        assert result["opportunities"][0]["action"] == "BUY"
+
+    @pytest.mark.asyncio
+    async def test_cursor_cli_error_exit_code(self):
+        """Cursor exits with non-zero — fallback."""
+        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory("", returncode=1, stderr="model not found")):
+            advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="bad-model", timeout=10))
+            result = await advisor.consult(
+                positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
+                opportunities=[],
+                account={"balance_usdc": 1000},
+            )
+
+        assert result == {"positions": [], "opportunities": []}
+
+
+# ── Response validation ───────────────────────────────────
+
+
+class TestValidateResponse:
+    def test_valid_response_unchanged(self):
+        resp = {
+            "positions": [{"symbol": "ETH", "action": "HOLD", "reasoning": "ok"}],
+            "opportunities": [{"symbol": "BTC", "action": "BUY", "reasoning": "go"}],
+        }
+        result = _validate_response(resp)
+        assert len(result["positions"]) == 1
+        assert len(result["opportunities"]) == 1
+
+    def test_drops_invalid_position_action(self):
+        resp = {
+            "positions": [
+                {"symbol": "ETH", "action": "HOLD", "reasoning": "ok"},
+                {"symbol": "BTC", "action": "BUY", "reasoning": "wrong"},  # BUY not valid for positions
+            ],
+            "opportunities": [],
+        }
+        result = _validate_response(resp)
+        assert len(result["positions"]) == 1
+        assert result["positions"][0]["symbol"] == "ETH"
+
+    def test_drops_invalid_opportunity_action(self):
+        resp = {
+            "positions": [],
+            "opportunities": [
+                {"symbol": "ETH", "action": "BUY", "reasoning": "go"},
+                {"symbol": "BTC", "action": "CLOSE", "reasoning": "bad"},  # CLOSE not valid for opportunities
+            ],
+        }
+        result = _validate_response(resp)
+        assert len(result["opportunities"]) == 1
+        assert result["opportunities"][0]["symbol"] == "ETH"
+
+    def test_drops_missing_symbol(self):
+        resp = {
+            "positions": [{"action": "HOLD", "reasoning": "ok"}],  # no symbol
+            "opportunities": [],
+        }
+        result = _validate_response(resp)
+        assert len(result["positions"]) == 0
+
+    def test_drops_non_dict_items(self):
+        resp = {
+            "positions": ["not a dict", 42, None],
+            "opportunities": [True],
+        }
+        result = _validate_response(resp)
         assert result["positions"] == []
         assert result["opportunities"] == []
+
+    def test_missing_reasoning_gets_default(self):
+        resp = {
+            "positions": [{"symbol": "ETH", "action": "CLOSE"}],  # no reasoning
+            "opportunities": [{"symbol": "BTC", "action": "SHORT"}],
+        }
+        result = _validate_response(resp)
+        assert result["positions"][0]["reasoning"] == ""
+        assert result["opportunities"][0]["reasoning"] == ""
+
+    def test_positions_not_list_becomes_empty(self):
+        resp = {"positions": "garbage", "opportunities": []}
+        result = _validate_response(resp)
+        assert result["positions"] == []
+
+    def test_missing_keys_become_empty(self):
+        resp = {"some_random_key": True}
+        result = _validate_response(resp)
+        assert result["positions"] == []
+        assert result["opportunities"] == []
+
+    def test_scale_up_valid_position_action(self):
+        resp = {
+            "positions": [{"symbol": "ETH", "action": "SCALE_UP", "reasoning": "momentum"}],
+            "opportunities": [],
+        }
+        result = _validate_response(resp)
+        assert len(result["positions"]) == 1
+        assert result["positions"][0]["action"] == "SCALE_UP"
+
+    def test_adjust_valid_position_action(self):
+        resp = {
+            "positions": [{"symbol": "SOL", "action": "ADJUST", "reasoning": "tighten SL", "adjustments": {"stop_loss": 150}}],
+            "opportunities": [],
+        }
+        result = _validate_response(resp)
+        assert len(result["positions"]) == 1
+        assert result["positions"][0]["adjustments"]["stop_loss"] == 150

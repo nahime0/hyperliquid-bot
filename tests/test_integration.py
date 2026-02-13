@@ -119,16 +119,16 @@ class TestAdvisorIntegration:
         # This test verifies the defer mechanism works end-to-end
         # We manually defer (since we can't control AI output)
         advisor.set_cycle(1)
-        advisor.defer("SOL", "BUY", {"wait_cycles": 2})
+        await advisor.defer("SOL", "BUY", {"wait_cycles": 2})
         assert "SOL" in advisor.deferred_symbols
 
         # Not ready yet
         advisor.set_cycle(2)
-        ready = advisor.check_deferred({"SOL": 150.0})
+        ready = await advisor.check_deferred({"SOL": 150.0})
         assert "SOL" not in ready
 
         # Ready now
         advisor.set_cycle(4)
-        ready = advisor.check_deferred({"SOL": 150.0})
+        ready = await advisor.check_deferred({"SOL": 150.0})
         assert "SOL" in ready
         assert "SOL" not in advisor.deferred_symbols

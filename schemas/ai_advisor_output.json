@@ -58,7 +58,11 @@
         },
         "required": ["symbol", "action", "reasoning"]
       }
+    },
+    "context_file_read": {
+      "type": "boolean",
+      "description": "Whether the AI read the context_file during this cycle"
     }
   },
-  "required": ["positions", "opportunities"]
+  "required": ["positions", "opportunities", "context_file_read"]
 }
