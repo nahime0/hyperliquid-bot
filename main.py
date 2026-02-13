@@ -889,6 +889,9 @@ class Bot:
                 pass
             try:
                 await self._market_data.refresh_mid_prices()
+                # Check for manual close requests from webapp
+                async with self._close_lock:
+                    await self._process_ask_close()
                 open_pos = await self._positions.get_open_positions()
                 n = len(open_pos)
                 if n:
@@ -1020,6 +1023,56 @@ class Bot:
                         logger.debug("Failed to log SL_TP_TRIGGER event", exc_info=True)
                 except Exception:
                     logger.exception("Failed to auto-close %s", symbol)
+
+    # ── Manual close (ask_close from webapp) ────────────────
+
+    async def _process_ask_close(self) -> None:
+        """Close positions flagged with ask_close by the webapp."""
+        try:
+            to_close = await self._db.get_ask_close_positions()
+        except Exception:
+            logger.debug("Failed to query ask_close positions", exc_info=True)
+            return
+
+        for pos in to_close:
+            symbol = pos["symbol"]
+            direction = pos.get("direction", "LONG")
+            price = self._market_data.get_mid_price(symbol)
+            if not price or price <= 0:
+                logger.warning("ask_close: no price for %s — skipping", symbol)
+                continue
+
+            reason = "manual_close"
+            try:
+                if not self._paper:
+                    await self._client.close_position(symbol)
+                pnl = await self._positions.close_position(pos["id"], price, reason)
+                await self._db.insert_trade(
+                    symbol=symbol, side="CLOSE", price=price,
+                    quantity=pos["quantity"], pnl=pnl,
+                    strategy=pos["strategy"],
+                    notes=f"{'[PAPER] ' if self._paper else ''}Manual close from webapp",
+                )
+                self._cooldown.record_trade_result(symbol, pnl > 0)
+                await self._telegram.notify_trade(
+                    action="CLOSE", symbol=symbol, qty=pos["quantity"], price=price,
+                )
+                logger.info(
+                    "%sManual close %s %s @ %g PnL=%.4f (ask_close)",
+                    "[PAPER] " if self._paper else "", direction, symbol, price, pnl,
+                )
+                try:
+                    await self._db.insert_event(
+                        cycle=self._cycle_count, symbol=symbol,
+                        event_type="MANUAL_CLOSE", source="webapp",
+                        action="CLOSE", reasoning="Manual close requested from webapp",
+                        details={"price": round(price, 6), "pnl": round(pnl, 4), "paper": self._paper},
+                        position_id=pos["id"],
+                    )
+                except Exception:
+                    logger.debug("Failed to log MANUAL_CLOSE event", exc_info=True)
+            except Exception:
+                logger.exception("Failed to manual-close %s (ask_close)", symbol)
 
     # ── Dashboard status ──────────────────────────────────────
 
