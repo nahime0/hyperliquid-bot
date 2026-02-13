@@ -5,10 +5,12 @@ import { useOpenPositions } from "@/hooks/usePositions";
 import { useTrades } from "@/hooks/useTrades";
 import { useEquity } from "@/hooks/useEquity";
 import { useStats } from "@/hooks/useStats";
+import { useEvents } from "@/hooks/useEvents";
 import { Card, StatCard, Skeleton } from "@/components/shared/Card";
 import { PnlBadge } from "@/components/shared/PnlBadge";
 import { DirectionBadge } from "@/components/shared/DirectionBadge";
 import { SideBadge } from "@/components/shared/SideBadge";
+import { ScoreBar } from "@/components/shared/ScoreBar";
 import { TimeAgo } from "@/components/shared/TimeAgo";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { formatUsd, formatPrice, formatPct } from "@/lib/format";
@@ -352,6 +354,93 @@ function PerformanceSummary({ stats }: { stats: AggregateStats | null }) {
   );
 }
 
+/* ── Recent Signals ─────────────────────────────────────── */
+function RecentSignals() {
+  const { events, isLoading } = useEvents({ limit: 10, event_type: "SIGNAL" });
+
+  if (isLoading) {
+    return (
+      <Card title="Recent Signals">
+        <Skeleton className="w-full h-32" />
+      </Card>
+    );
+  }
+
+  if (events.length === 0) {
+    return (
+      <Card title="Recent Signals">
+        <EmptyState title="No signals yet" description="Strategy signals will appear here" />
+      </Card>
+    );
+  }
+
+  return (
+    <Card title={`Recent Signals (${events.length})`} noPadding>
+      <div className="divide-y divide-border/30">
+        {events.map((e) => {
+          let details: Record<string, unknown> | null = null;
+          try { if (e.details && e.details !== "{}") details = JSON.parse(e.details); } catch { /* ignore */ }
+
+          return (
+            <div key={e.id} className="py-2.5 px-4">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="font-semibold text-sm text-text-primary">{e.symbol}</span>
+                {e.action && (
+                  <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded border ${
+                    e.action === "BUY" ? "text-profit bg-profit/10 border-profit/20"
+                    : e.action === "SHORT" ? "text-loss bg-loss/10 border-loss/20"
+                    : "text-text-secondary bg-bg-elevated border-border-light"
+                  }`}>
+                    {e.action}
+                  </span>
+                )}
+                {e.confidence !== null && (
+                  <div className="w-24">
+                    <ScoreBar value={e.confidence} size="md" />
+                  </div>
+                )}
+                <span className="text-[10px] text-text-muted ml-auto">{e.source}</span>
+                <TimeAgo date={e.timestamp} />
+              </div>
+              {details && (
+                <div className="flex gap-3 text-[11px]">
+                  {details.rsi != null && (
+                    <span className="text-text-muted">
+                      RSI <span className={`font-mono font-medium ${Number(details.rsi) < 35 ? "text-profit" : Number(details.rsi) > 65 ? "text-loss" : "text-text-secondary"}`}>
+                        {Number(details.rsi).toFixed(1)}
+                      </span>
+                    </span>
+                  )}
+                  {details.bb_pct != null && (
+                    <span className="text-text-muted">
+                      BB <span className="font-mono font-medium text-text-secondary">{(Number(details.bb_pct) * 100).toFixed(0)}%</span>
+                    </span>
+                  )}
+                  {details.volume_ratio != null && (
+                    <span className="text-text-muted">
+                      Vol <span className={`font-mono font-medium ${Number(details.volume_ratio) > 1.5 ? "text-profit" : "text-text-secondary"}`}>
+                        {Number(details.volume_ratio).toFixed(1)}x
+                      </span>
+                    </span>
+                  )}
+                  {details.trend != null && (
+                    <span className={`font-medium ${details.trend === "up" ? "text-profit" : details.trend === "down" ? "text-loss" : "text-text-muted"}`}>
+                      {String(details.trend)}
+                    </span>
+                  )}
+                  {details.divergence != null && (
+                    <span className="text-purple font-medium">{String(details.divergence)}</span>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
+  );
+}
+
 /* ── Main Page ─────────────────────────────────────────── */
 export default function OverviewPage() {
   const { status, isLoading } = useStatus();
@@ -386,7 +475,10 @@ export default function OverviewPage() {
           <PerformanceSummary stats={stats ?? null} />
         </div>
       </div>
-      <RecentTradesTable />
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+        <RecentSignals />
+        <RecentTradesTable />
+      </div>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import { PnlBadge } from "@/components/shared/PnlBadge";
 import { DirectionBadge } from "@/components/shared/DirectionBadge";
 import { SideBadge } from "@/components/shared/SideBadge";
 import { EventTypeBadge } from "@/components/shared/EventTypeBadge";
+import { ScoreBar } from "@/components/shared/ScoreBar";
 import { StatusBadge } from "@/components/shared/StatusBadge";
 import { TimeAgo } from "@/components/shared/TimeAgo";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -107,6 +108,9 @@ export default function CoinDetailPage({ params }: { params: Promise<{ symbol: s
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 text-xs">
                       {e.action && <span className="font-semibold text-text-primary">{e.action}</span>}
+                      {e.event_type === "SIGNAL" && e.confidence !== null && (
+                        <div className="w-20"><ScoreBar value={e.confidence} /></div>
+                      )}
                       <span className="text-text-muted font-mono">cycle #{e.cycle}</span>
                       <span className="ml-auto"><TimeAgo date={e.timestamp} /></span>
                     </div>
