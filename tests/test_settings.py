@@ -30,7 +30,7 @@ class TestRiskConfig:
     def test_defaults(self):
         c = RiskConfig()
         assert c.max_trade_pct == 15.0
-        assert c.stop_loss_pct == 1.5
+        assert c.stop_loss_pct == 2.0
         assert c.take_profit_pct == 1.5
         assert c.max_daily_drawdown_pct == 5.0
         assert c.max_total_drawdown_pct == 15.0
@@ -49,8 +49,8 @@ class TestRiskConfig:
         assert c.time_stop_hours == 4.0
         # ATR-based stop loss
         assert c.use_atr_sl is True
-        assert c.atr_sl_multiplier == 2.0
-        assert c.atr_sl_min_pct == 0.5
+        assert c.atr_sl_multiplier == 2.5
+        assert c.atr_sl_min_pct == 0.8
         assert c.atr_sl_max_pct == 3.0
         # Risk-based sizing
         assert c.risk_per_trade_pct == 1.0
@@ -79,6 +79,7 @@ class TestMarketConfig:
         assert c.min_pair_volume == 50_000.0
         assert c.max_coins == 60
         assert c.max_spread_pct == 0.5
+        assert c.coin_blacklist == ("AXS", "MOODENG", "CC", "HYPE")
 
     def test_frozen(self):
         c = MarketConfig()
@@ -89,6 +90,7 @@ class TestMarketConfig:
 class TestStrategyConfig:
     def test_defaults(self):
         c = StrategyConfig()
+        assert c.tf_allow_short is False
         assert c.min_candle_volume_usdc == 10_000.0
         assert c.primary_interval == "5m"
         assert c.mr_interval == "15m"

@@ -124,13 +124,13 @@ class TestShortEntryScoring:
     def test_partial_score_just_passes(self):
         """Score exactly at threshold -> signal generated."""
         s = _make_strategy()
-        sig = _make_signal(change_4h=-4.0, trend_1h="NEUTRAL", trend_4h="NEUTRAL",
-                           volume_ratio=1.5)
+        sig = _make_signal(change_4h=-4.0, trend_1h="BEARISH", trend_4h="NEUTRAL",
+                           volume_ratio=0.5)
         s._funding_rates["ETH"] = 0.0007  # no funding points
-        # chg(0.30) + vol(0.10) + cd(0.10) = 0.50
+        # chg(0.30) + t1h(0.20) + vol(0) + fund(0) + cd(0.10) = 0.60
         d = s._check_short_entry("ETH", sig)
         assert d is not None
-        assert d.confidence == 0.50
+        assert d.confidence == 0.60
 
 
 # -- LONG entry scoring (mirrored) --
@@ -471,3 +471,37 @@ class TestMultiStrategyConflictResolution:
         result = MultiStrategy.merge(decisions)
         assert len(result) == 1
         assert result[0].strategy_type == "trend_following"
+
+
+# -- SHORT disabled via allow_short=False --
+
+
+class TestShortDisabled:
+    def test_short_blocked_when_disabled(self):
+        """allow_short=False -> _check_short_entry always returns None."""
+        s = _make_strategy()
+        s._allow_short = False
+        sig = _make_signal(change_4h=-4.0, trend_1h="BEARISH", trend_4h="BEARISH",
+                           volume_ratio=1.5)
+        d = s._check_short_entry("ETH", sig)
+        assert d is None
+
+    def test_long_still_works_when_short_disabled(self):
+        """allow_short=False does NOT affect LONG entries."""
+        s = _make_strategy()
+        s._allow_short = False
+        sig = _make_signal(change_4h=4.0, trend_1h="BULLISH", trend_4h="BULLISH",
+                           volume_ratio=1.5)
+        d = s._check_long_entry("ETH", sig)
+        assert d is not None
+        assert d.action == "BUY"
+
+    def test_short_works_when_enabled(self):
+        """allow_short=True (explicit) -> SHORT entry works normally."""
+        s = _make_strategy()
+        s._allow_short = True
+        sig = _make_signal(change_4h=-4.0, trend_1h="BEARISH", trend_4h="BEARISH",
+                           volume_ratio=1.5)
+        d = s._check_short_entry("ETH", sig)
+        assert d is not None
+        assert d.action == "SHORT"

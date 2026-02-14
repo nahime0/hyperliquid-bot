@@ -47,7 +47,7 @@ class AIConfig:
 @dataclass(frozen=True)
 class RiskConfig:
     max_trade_pct: float = 15.0
-    stop_loss_pct: float = 1.5
+    stop_loss_pct: float = 2.0
     take_profit_pct: float = 1.5
     auto_take_profit: bool = False  # False → no auto-TP, rely on trailing stop
     max_daily_drawdown_pct: float = 5.0
@@ -80,8 +80,8 @@ class RiskConfig:
     global_cooldown_losses: int = 3       # trigger global cooldown after N losses
     # ATR-based stop loss
     use_atr_sl: bool = True               # use ATR to compute per-coin stop loss
-    atr_sl_multiplier: float = 2.0        # SL = price +/- (multiplier * ATR)
-    atr_sl_min_pct: float = 0.5           # floor: never tighter than 0.5%
+    atr_sl_multiplier: float = 2.5        # SL = price +/- (multiplier * ATR)
+    atr_sl_min_pct: float = 0.8           # floor: never tighter than 0.8%
     atr_sl_max_pct: float = 3.0           # ceiling: never wider than 3.0%
     # Risk-based position sizing
     risk_per_trade_pct: float = 1.0       # max % of bankroll to risk per trade
@@ -104,6 +104,7 @@ class MarketConfig:
     min_pair_volume: float = 50_000.0   # minimum 24h volume in USDC
     max_coins: int = 60                 # max perpetual coins to monitor
     max_spread_pct: float = 0.5         # max bid-ask spread % (blocks entry if exceeded)
+    coin_blacklist: tuple[str, ...] = ("AXS", "MOODENG", "CC", "HYPE")  # blocked coins
     intervals: tuple[str, ...] = ("5m", "15m", "1h")  # candle intervals to subscribe
 
 
@@ -116,6 +117,7 @@ class StrategyConfig:
         "mtf_confluence", "session_momentum", "volume_spike",
     )
     rsi_div_period: int = 14
+    tf_allow_short: bool = False       # disable SHORT on trend_following (0% WR)
     tf_change_threshold: float = 4.0  # % price change over 4h to fire trend signal
     rsi_div_swing_window: int = 5       # wider window to catch more divergences (was 4)
     rsi_div_long_exit: float = 55.0     # optimized: le=55 in 50% of top 30
@@ -213,7 +215,7 @@ def load_settings() -> Settings:
         ),
         risk=RiskConfig(
             max_trade_pct=float(os.getenv("MAX_TRADE_PCT", "15")),
-            stop_loss_pct=float(os.getenv("STOP_LOSS_PCT", "1.5")),
+            stop_loss_pct=float(os.getenv("STOP_LOSS_PCT", "2.0")),
             take_profit_pct=float(os.getenv("TAKE_PROFIT_PCT", "1.5")),
             auto_take_profit=_bool(os.getenv("AUTO_TAKE_PROFIT"), default=False),
             max_daily_drawdown_pct=float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", "5.0")),
@@ -237,8 +239,8 @@ def load_settings() -> Settings:
             global_cooldown_sec=int(os.getenv("GLOBAL_COOLDOWN_SEC", "900")),
             global_cooldown_losses=int(os.getenv("GLOBAL_COOLDOWN_LOSSES", "3")),
             use_atr_sl=_bool(os.getenv("USE_ATR_SL"), default=True),
-            atr_sl_multiplier=float(os.getenv("ATR_SL_MULTIPLIER", "2.0")),
-            atr_sl_min_pct=float(os.getenv("ATR_SL_MIN_PCT", "0.5")),
+            atr_sl_multiplier=float(os.getenv("ATR_SL_MULTIPLIER", "2.5")),
+            atr_sl_min_pct=float(os.getenv("ATR_SL_MIN_PCT", "0.8")),
             atr_sl_max_pct=float(os.getenv("ATR_SL_MAX_PCT", "3.0")),
             risk_per_trade_pct=float(os.getenv("RISK_PER_TRADE_PCT", "1.0")),
             partial_tp_enabled=_bool(os.getenv("PARTIAL_TP_ENABLED"), default=False),
@@ -255,6 +257,9 @@ def load_settings() -> Settings:
             min_pair_volume=float(os.getenv("MIN_PAIR_VOLUME", "50000")),
             max_coins=int(os.getenv("MAX_COINS", "60")),
             max_spread_pct=float(os.getenv("MAX_SPREAD_PCT", "0.5")),
+            coin_blacklist=tuple(
+                os.getenv("COIN_BLACKLIST", "AXS,MOODENG,CC,HYPE").split(",")
+            ),
         ),
         strategy=StrategyConfig(
             active_strategies=tuple(
@@ -274,6 +279,7 @@ def load_settings() -> Settings:
             primary_interval=os.getenv("PRIMARY_INTERVAL", "5m"),
             mr_interval=os.getenv("MR_INTERVAL", "15m"),
             trend_interval=os.getenv("TREND_INTERVAL", "1h"),
+            tf_allow_short=_bool(os.getenv("TF_ALLOW_SHORT"), default=False),
             tf_change_threshold=float(os.getenv("TF_CHANGE_THRESHOLD", "4.0")),
             # Buy the Dip
             btd_dip_min_pct=float(os.getenv("BTD_DIP_MIN_PCT", "0.5")),

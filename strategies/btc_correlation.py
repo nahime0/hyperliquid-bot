@@ -60,7 +60,7 @@ W_VOLUME = 0.15          # volume ratio >= threshold
 W_FUNDING = 0.10         # funding rate acceptable
 W_TREND = 0.10           # 1h trend alignment
 W_COOLDOWN = 0.10        # no per-symbol cooldown
-SCORE_THRESHOLD = 0.50   # minimum score to generate signal
+SCORE_THRESHOLD = 0.60   # minimum score to generate signal
 
 # -- Thresholds (defaults, overridden from StrategyConfig) --
 BTC_MIN_MOVE_PCT = 1.0   # BTC must move at least 1% in 1h

@@ -190,6 +190,13 @@ class RiskManager:
         if decision.action == "HOLD":
             return ValidationResult(approved=True, decision=decision, reason="pass-through")
 
+        # ── Coin blacklist ──
+        if (decision.action in ("BUY", "SHORT", "SCALE_UP", "FLIP")
+                and decision.symbol
+                and self._market_config
+                and decision.symbol in self._market_config.coin_blacklist):
+            return await self._block(decision, f"Blacklisted coin: {decision.symbol}")
+
         # ── Kill switch ──
         if self._kill_switch:
             return await self._block(decision, f"KILL SWITCH: {self._kill_reason}")

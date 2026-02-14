@@ -59,7 +59,7 @@ W_VOLUME = 0.15      # volume ratio >= threshold
 W_RSI = 0.15         # RSI confirmation
 W_FUNDING = 0.10     # funding rate acceptable
 W_COOLDOWN = 0.10    # no per-symbol cooldown
-SCORE_THRESHOLD = 0.50
+SCORE_THRESHOLD = 0.60
 
 # -- Thresholds --
 MIN_VOLUME_RATIO = 1.0

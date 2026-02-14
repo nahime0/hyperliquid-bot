@@ -73,7 +73,7 @@ W_VOLUME = 0.15               # volume ratio >= threshold
 W_MACRO_RSI = 0.15            # 1h RSI alignment
 W_FUNDING = 0.10              # funding rate acceptable
 W_COOLDOWN = 0.10             # no per-symbol cooldown
-SCORE_THRESHOLD = 0.50        # minimum score to generate signal
+SCORE_THRESHOLD = 0.60        # minimum score to generate signal
 
 # ── Hard-block thresholds ───────────────────────────────────
 HARD_FUNDING_RATE = 0.001     # extreme funding → always block

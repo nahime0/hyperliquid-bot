@@ -148,6 +148,29 @@ class TestValidation:
         assert "below minimum" in result.reason
 
     @pytest.mark.asyncio
+    async def test_validate_blacklisted_coin_blocks(self, db, risk_config):
+        """Blacklisted coins are blocked for BUY/SHORT/SCALE_UP/FLIP."""
+        mc = MarketConfig(coin_blacklist=("AXS", "MOODENG"))
+        client = MockClient(balance=1000.0)
+        pt = PositionTracker(db, risk_config)
+        rm = RiskManager(risk_config, client, db, position_tracker=pt, market_config=mc)
+        rm._current_balance = 1000.0
+        rm._peak_balance = 1000.0
+        rm._open_position_count = 0
+
+        for action in ("BUY", "SHORT"):
+            d = Decision(action=action, confidence=0.8, reasoning="sig", symbol="AXS")
+            result = await rm.validate_decision(d)
+            assert result.approved is False
+            assert "Blacklisted" in result.reason
+
+        # Non-blacklisted coin is fine
+        d = Decision(action="BUY", confidence=0.8, reasoning="sig", symbol="ETH",
+                     stop_loss=1960, take_profit=2060)
+        result = await rm.validate_decision(d)
+        assert result.approved is True
+
+    @pytest.mark.asyncio
     async def test_validate_custom_min_confidence(self, db, risk_config):
         """min_confidence from config is respected (not hardcoded 0.5)."""
         client = MockClient(balance=1000.0)

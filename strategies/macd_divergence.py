@@ -64,7 +64,7 @@ W_VOLUME = 0.15            # volume ratio >= threshold
 W_TREND = 0.15             # 1h trend alignment
 W_FUNDING = 0.10           # funding rate acceptable
 W_COOLDOWN = 0.10          # no per-symbol cooldown
-SCORE_THRESHOLD = 0.50     # minimum score to generate signal
+SCORE_THRESHOLD = 0.60     # minimum score to generate signal
 
 # -- Thresholds --
 MIN_VOLUME_RATIO = 1.0     # volume ratio threshold

@@ -52,7 +52,7 @@ W_TREND_1H = 0.15
 W_VOLUME = 0.15
 W_FUNDING = 0.10
 W_COOLDOWN = 0.10
-SCORE_THRESHOLD = 0.50
+SCORE_THRESHOLD = 0.60
 
 # EMA params for 4h trend on 1h candles (same as TrendFollowing)
 EMA_FAST_4H = 12

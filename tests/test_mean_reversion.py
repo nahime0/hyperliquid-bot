@@ -94,11 +94,11 @@ class TestLongEntryScoring:
         assert d.confidence >= 0.90
 
     def test_graduated_rsi_scores_higher_for_deeper_oversold(self):
-        """RSI=10 scores higher than RSI=34 (graduated)."""
+        """RSI=10 scores higher than RSI=20 (graduated)."""
         s = _make_strategy()
         sig_deep = _make_signal(rsi=10.0, price=2100.0, bb_lower=2010.0,
                                 volume_ratio=1.5, rsi_1h=45.0)
-        sig_mild = _make_signal(rsi=34.0, price=2100.0, bb_lower=2010.0,
+        sig_mild = _make_signal(rsi=20.0, price=2100.0, bb_lower=2010.0,
                                 volume_ratio=1.5, rsi_1h=45.0)
         d_deep = s._check_long_entry("ETH", sig_deep)
         d_mild = s._check_long_entry("ETH", sig_mild)
@@ -110,11 +110,11 @@ class TestLongEntryScoring:
         """RSI oversold but price inside BB → has RSI graduated + minors."""
         s = _make_strategy()
         # price=2100 > bb_lower*1.005=2020.05 → BB component = 0
-        sig = _make_signal(rsi=30.0, price=2100.0, bb_lower=2010.0,
+        sig = _make_signal(rsi=20.0, price=2100.0, bb_lower=2010.0,
                            volume_ratio=1.5, rsi_1h=45.0)
         d = s._check_long_entry("ETH", sig)
         assert d is not None
-        # RSI graduated: (35-30)/35 ≈ 0.143 → W_RSI*0.143 + minors
+        # RSI graduated: (35-20)/35 ≈ 0.429 → W_RSI*0.429 + minors ≈ 0.61
         assert d.confidence >= SCORE_THRESHOLD
 
     def test_bb_only_with_all_minors(self):
@@ -127,12 +127,12 @@ class TestLongEntryScoring:
         assert d.confidence >= SCORE_THRESHOLD
 
     def test_rsi_and_bb_with_cooldown_only(self):
-        """Deep RSI + BB graduated + cooldown, minors fail → still fires."""
+        """Deep RSI + BB graduated + cooldown, some minors fail → still fires."""
         s = _make_strategy()
         s._funding_rates["ETH"] = 0.0006  # > max_funding_rate(0.0005) but < HARD(0.001)
         # RSI=5 → intensity=0.857, BB: price=1970 far below 2010 → intensity~1.0
         sig = _make_signal(rsi=5.0, price=1970.0, bb_lower=2010.0,
-                           volume_ratio=0.5, rsi_1h=65.0)
+                           volume_ratio=1.5, rsi_1h=65.0)
         d = s._check_long_entry("ETH", sig)
         assert d is not None
         assert d.confidence >= SCORE_THRESHOLD
@@ -221,10 +221,10 @@ class TestShortEntryScoring:
         assert d.confidence >= 0.90
 
     def test_graduated_rsi_scores_higher_for_deeper_overbought(self):
-        """RSI=90 scores higher than RSI=66."""
+        """RSI=90 scores higher than RSI=80."""
         s = _make_strategy()
         sig_deep = self._short_signal(rsi=90.0, price=2100.0, bb_upper=2200.0)
-        sig_mild = self._short_signal(rsi=66.0, price=2100.0, bb_upper=2200.0)
+        sig_mild = self._short_signal(rsi=80.0, price=2100.0, bb_upper=2200.0)
         d_deep = s._check_short_entry("ETH", sig_deep)
         d_mild = s._check_short_entry("ETH", sig_mild)
         assert d_deep is not None
@@ -476,7 +476,7 @@ class TestEdgeCases:
         """Verify score is a float."""
         s = _make_strategy()
         sig = _make_signal(rsi=10.0, price=2100.0, bb_lower=2010.0,
-                           volume_ratio=1.5, rsi_1h=None)
+                           volume_ratio=1.5, rsi_1h=45.0)
         d = s._check_long_entry("ETH", sig)
         assert d is not None
         assert isinstance(d.confidence, float)

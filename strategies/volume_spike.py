@@ -60,7 +60,7 @@ W_PRICE_LEVEL = 0.15      # price near BB extreme
 W_TREND = 0.10            # 1h trend alignment
 W_FUNDING = 0.10          # funding rate acceptable
 W_COOLDOWN = 0.10         # no per-symbol cooldown
-SCORE_THRESHOLD = 0.50    # minimum score to generate signal
+SCORE_THRESHOLD = 0.60    # minimum score to generate signal
 
 # -- Indicator params --
 RSI_PERIOD = 14

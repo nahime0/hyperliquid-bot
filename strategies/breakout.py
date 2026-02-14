@@ -59,7 +59,7 @@ W_TREND = 0.20               # 1h trend alignment
 W_CLEAN_BREAK = 0.10         # all confirm bars above/below level
 W_FUNDING = 0.10             # funding rate acceptable
 W_COOLDOWN = 0.10            # no per-symbol cooldown
-SCORE_THRESHOLD = 0.50       # minimum score to generate signal
+SCORE_THRESHOLD = 0.60       # minimum score to generate signal
 
 # -- Thresholds --
 MIN_1H_CANDLES = 24           # need at least 24 1h candles for S/R

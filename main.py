@@ -128,6 +128,7 @@ class Bot:
             interval=settings.strategy.trend_interval,
             min_candle_volume_usdc=settings.strategy.min_candle_volume_usdc,
             change_threshold=settings.strategy.tf_change_threshold,
+            allow_short=settings.strategy.tf_allow_short,
             db=self._db,
         )
 
@@ -585,7 +586,7 @@ class Bot:
                 opportunities.append(opp)
 
         # Cap opportunities: score >= 0.7 required (deferred-ready exempt), top 15 by score
-        MIN_SCORE_FOR_AI = 0.70
+        MIN_SCORE_FOR_AI = 0.75
         MAX_OPPORTUNITIES_PER_CYCLE = 15
         deferred_ready_opps = [o for o in opportunities if o["symbol"] in ready_symbols]
         regular_opps = [o for o in opportunities if o["symbol"] not in ready_symbols]

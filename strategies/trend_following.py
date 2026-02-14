@@ -58,7 +58,7 @@ W_TREND_4H = 0.20        # 4h trend alignment (EMA12/EMA26 on 1h)
 W_VOLUME = 0.10           # volume ratio >= threshold
 W_FUNDING = 0.10          # funding rate acceptable
 W_COOLDOWN = 0.10         # no per-symbol cooldown
-SCORE_THRESHOLD = 0.50    # minimum score to generate signal
+SCORE_THRESHOLD = 0.60    # minimum score to generate signal
 
 # -- Thresholds --
 CHANGE_4H_THRESHOLD = 3.0  # % price change over 4h to qualify
@@ -100,6 +100,7 @@ class TrendFollowingStrategy(Strategy):
         interval: str = "1h",
         min_candle_volume_usdc: float = 10_000.0,
         change_threshold: float = CHANGE_4H_THRESHOLD,
+        allow_short: bool = True,
         db: Database | None = None,
     ) -> None:
         self._md = market_data
@@ -111,6 +112,7 @@ class TrendFollowingStrategy(Strategy):
         self._interval = interval
         self._min_candle_volume_usdc = min_candle_volume_usdc
         self._change_threshold = change_threshold
+        self._allow_short = allow_short
         self._signals: dict[str, TrendSignal] = {}
         self._funding_rates: dict[str, float] = {}
         self._max_funding_rate: float = 0.0005
@@ -284,6 +286,8 @@ class TrendFollowingStrategy(Strategy):
 
     def _check_short_entry(self, symbol: str, sig: TrendSignal) -> Decision | None:
         """Score-based SHORT entry for downtrends."""
+        if not self._allow_short:
+            return None
         if sig.price is None or sig.change_4h is None:
             return None
 

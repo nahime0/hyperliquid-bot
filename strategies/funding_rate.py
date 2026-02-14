@@ -58,7 +58,7 @@ W_VOLUME = 0.15              # volume ratio >= threshold
 W_TREND = 0.15               # 1h trend not opposing
 W_COOLDOWN = 0.10            # no per-symbol cooldown
 W_CROWDED = 0.10             # high volume as proxy for crowded positioning
-SCORE_THRESHOLD = 0.50       # minimum score to generate signal
+SCORE_THRESHOLD = 0.60       # minimum score to generate signal
 
 # -- Thresholds --
 RSI_PERIOD = 14
