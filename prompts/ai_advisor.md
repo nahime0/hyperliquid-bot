@@ -14,6 +14,7 @@ Each cycle ~ 1 min. `wait_cycles: N` ~ N minutes. (5=5min, 30=30min, 60=1h, 240=
 
 **Positions**: `entry` (entry price), `price` (current), `upnl` (unrealized PnL USDC), `age_min` (minutes open), `direction`, `pnl_pct`, `trailing_stop`, `stop_loss`, `take_profit`, `indicators`
 **Opportunities**: `action` (BUY/SHORT), `confidence` (score 0.50-1.00), `strategy`, `reasoning`, `price`, `sl`, `tp`, `size_pct`, `indicators`
+**Entry price gate** (in opportunity adjustments): `max_entry_price` (BUY: skip if price rises above this), `min_entry_price` (SHORT: skip if price drops below this)
 **Market data** (`market_data.<SYMBOL>`): `price_action_5m` ([O,H,L,C,V] arrays), `change_1h/4h/24h_pct`, `support/resistance_4h/24h`, `trend_4h`, `order_book`, `funding_rate`, `open_interest`, `oi_change_4h_pct`
 **Account**: `balance_usdc`, `daily_pnl_pct`, `open_pos`, `max_pos`, `util_pct`, `margin_used`, `margin_free`, `target_util_pct`, `win_rate`, `consec_losses`, `default_leverage`, `usdc_per_position`, `max_trade_pct`
 
@@ -111,6 +112,12 @@ Do NOT use FLIP for:
 - **BUY/SHORT**: approve entry. May adjust SL, TP, size_pct, leverage
 - **HOLD**: defer. Specify `defer` with conditions
 
+### Entry Price Gate
+AI response may take 10-30s. Price can move significantly during that time. Always specify a price gate to prevent stale entries:
+- **BUY**: set `max_entry_price` in adjustments — order executes only if current price <= max_entry_price. Typically set ~0.3-0.5% above the price shown in the payload.
+- **SHORT**: set `min_entry_price` in adjustments — order executes only if current price >= min_entry_price. Typically set ~0.3-0.5% below the price shown in the payload.
+- If price moves beyond the gate, the entry is skipped (no defer — next cycle re-evaluates).
+
 ### Leverage & Sizing
 - Default leverage is given in `account.default_leverage` (typically 2-3x). Use this unless you have a specific reason to reduce it.
 - Only specify `leverage` in your response if you want to OVERRIDE the default. Omitting it = use default.
@@ -118,7 +125,6 @@ Do NOT use FLIP for:
 
 ### Risk Rules
 - Max 15 positions, target ~50% utilization
-- Block entries if daily PnL < -3%
 - Reduce size during losing streaks (3+ consec_losses)
 - Prefer HOLD over marginal entries (confidence < 0.6)
 - Consider correlation: avoid overexposure to similar assets

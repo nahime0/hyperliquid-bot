@@ -1,18 +1,54 @@
 """Claude Code CLI backend for AI Advisor.
 
 Invokes `claude` CLI with --json-schema for structured output.
+Uses asyncio.create_subprocess_exec for proper timeout/cancellation.
 """
 from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
+import os
+import signal
 from pathlib import Path
 from typing import Any
 
 from utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_EMPTY = {"positions": [], "opportunities": []}
+_KILL_GRACE = 5  # seconds between SIGTERM and SIGKILL
+
+
+async def _kill_process(proc: asyncio.subprocess.Process) -> None:
+    """Kill a subprocess and its entire process group reliably."""
+    if proc.returncode is not None:
+        return  # already exited
+
+    pid = proc.pid
+    try:
+        # Kill entire process group (start_new_session=True → pgid == pid)
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+    # Give it a moment to exit gracefully
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=_KILL_GRACE)
+        return
+    except asyncio.TimeoutError:
+        pass
+
+    # Force kill
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2)
+    except asyncio.TimeoutError:
+        logger.error("Failed to kill claude CLI process (pid=%d) — may be orphaned", pid)
 
 
 async def invoke_claude_cli(
@@ -26,7 +62,7 @@ async def invoke_claude_cli(
 ) -> dict[str, Any]:
     """Invoke claude CLI and parse the structured output.
 
-    Uses subprocess.run in a thread with clean env (OAuth token, no API key).
+    Uses asyncio subprocess for proper timeout handling and process cleanup.
     """
     schema_content = schema_path.read_text()
     prompt = f"Review the following trading state and provide your decisions:\n\n{payload_json}"
@@ -45,29 +81,50 @@ async def invoke_claude_cli(
 
     logger.debug("Invoking claude CLI (model=%s, payload=%.1f KB)", model, len(payload_json) / 1024)
 
+    proc: asyncio.subprocess.Process | None = None
     try:
-        result = await asyncio.to_thread(
-            subprocess.run,
-            cmd,
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=timeout,
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
             start_new_session=True,
             env=env,
         )
-    except subprocess.TimeoutExpired:
-        logger.warning("claude CLI subprocess timed out after %ds", timeout)
-        return {"positions": [], "opportunities": []}
 
-    if result.returncode != 0:
-        logger.warning("claude CLI exit code %d: %s", result.returncode, (result.stderr or "")[:500])
-        return {"positions": [], "opportunities": []}
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=timeout,
+        )
 
-    output = (result.stdout or "").strip()
+    except asyncio.TimeoutError:
+        logger.warning("claude CLI timed out after %ds — killing process", timeout)
+        if proc is not None:
+            await _kill_process(proc)
+        return _EMPTY
+
+    except asyncio.CancelledError:
+        logger.warning("claude CLI call cancelled — killing process")
+        if proc is not None:
+            await _kill_process(proc)
+        raise
+
+    except Exception:
+        logger.warning("claude CLI failed to launch", exc_info=True)
+        if proc is not None:
+            await _kill_process(proc)
+        return _EMPTY
+
+    if proc.returncode != 0:
+        err = (stderr.decode(errors="replace") if stderr else "")[:500]
+        logger.warning("claude CLI exit code %d: %s", proc.returncode, err)
+        return _EMPTY
+
+    output = (stdout.decode(errors="replace") if stdout else "").strip()
     if not output:
-        logger.warning("claude CLI returned empty output (stderr: %s)", (result.stderr or "")[:300])
-        return {"positions": [], "opportunities": []}
+        err = (stderr.decode(errors="replace") if stderr else "")[:300]
+        logger.warning("claude CLI returned empty output (stderr: %s)", err)
+        return _EMPTY
 
     response = json.loads(output)
 
@@ -93,6 +150,6 @@ async def invoke_claude_cli(
 
     if not isinstance(parsed, dict):
         logger.warning("claude CLI returned non-dict: %s", type(parsed))
-        return {"positions": [], "opportunities": []}
+        return _EMPTY
 
     return parsed

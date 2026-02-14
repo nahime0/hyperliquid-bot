@@ -43,7 +43,9 @@
               "stop_loss": { "type": "number" },
               "take_profit": { "type": "number" },
               "size_pct": { "type": "number" },
-              "leverage": { "type": "integer", "minimum": 1, "maximum": 10 }
+              "leverage": { "type": "integer", "minimum": 1, "maximum": 10 },
+              "max_entry_price": { "type": "number" },
+              "min_entry_price": { "type": "number" }
             }
           },
           "defer": {

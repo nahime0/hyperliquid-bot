@@ -626,6 +626,16 @@ class Bot:
                     )
                 positions_for_ai = [p for p in open_positions if p["symbol"] not in held_syms]
 
+        # Skip opportunities when at max positions — can't open anything
+        max_pos = metrics.get("max_open_positions", 15)
+        cur_pos = metrics.get("open_positions", 0)
+        if opportunities and cur_pos >= max_pos:
+            logger.info(
+                "Max positions reached (%d/%d) — dropping %d opportunities, AI will only review existing positions",
+                cur_pos, max_pos, len(opportunities),
+            )
+            opportunities = []
+
         if not self._no_ai and (positions_for_ai or opportunities):
             utilization = metrics.get("capital_utilization", 0)
             account = {
@@ -767,10 +777,19 @@ class Bot:
                         orig.size_pct = adj["size_pct"]
                     if adj.get("leverage") is not None:
                         orig.leverage = adj["leverage"]
+                    # Entry price gate — pick whichever field is relevant for the action
+                    if adj.get("max_entry_price") is not None and orig.action == "BUY":
+                        orig.entry_price_limit = adj["max_entry_price"]
+                    elif adj.get("min_entry_price") is not None and orig.action == "SHORT":
+                        orig.entry_price_limit = adj["min_entry_price"]
                     approved.append(orig)
 
             # Keep AI-approved entries + all CLOSE/SELL/SCALE_UP/FLIP decisions
             candidates = approved + [d for d in candidates if d.action in ("CLOSE", "SELL", "SCALE_UP", "FLIP")]
+        else:
+            if not self._no_ai:
+                # AI enabled but nothing to review — drop unapproved entry candidates
+                candidates = [d for d in candidates if d.action in ("CLOSE", "SELL", "SCALE_UP", "FLIP")]
 
         # 6b. Protect positions with profitable SL from premature strategy exits
         # When trailing SL is already in profit, only AI or SL/TP monitor should close
@@ -1476,6 +1495,21 @@ class Bot:
             decision.action, symbol, decision.size_pct or 0, price,
         )
 
+        # Entry price gate — skip if price moved beyond AI-specified limit
+        if decision.entry_price_limit is not None and decision.action in ("BUY", "SHORT"):
+            if decision.action == "BUY" and price > decision.entry_price_limit:
+                logger.warning(
+                    "[PAPER] Price gate BLOCKED BUY %s: price %g > max_entry %g",
+                    symbol, price, decision.entry_price_limit,
+                )
+                return None
+            if decision.action == "SHORT" and price < decision.entry_price_limit:
+                logger.warning(
+                    "[PAPER] Price gate BLOCKED SHORT %s: price %g < min_entry %g",
+                    symbol, price, decision.entry_price_limit,
+                )
+                return None
+
         leverage = self._settings.hyperliquid.default_leverage
 
         if decision.action == "BUY":
@@ -1634,6 +1668,24 @@ class Bot:
         """Execute a BUY or SHORT entry on Hyperliquid."""
         symbol = decision.symbol
         price = await self._client.get_price(symbol)
+
+        # Entry price gate — skip if price moved beyond AI-specified limit
+        if decision.entry_price_limit is not None:
+            if is_buy and price > decision.entry_price_limit:
+                logger.warning(
+                    "Price gate BLOCKED BUY %s: price %g > max_entry %g (moved +%.2f%%)",
+                    symbol, price, decision.entry_price_limit,
+                    (price / decision.entry_price_limit - 1) * 100,
+                )
+                return None
+            if not is_buy and price < decision.entry_price_limit:
+                logger.warning(
+                    "Price gate BLOCKED SHORT %s: price %g < min_entry %g (moved -%.2f%%)",
+                    symbol, price, decision.entry_price_limit,
+                    (1 - price / decision.entry_price_limit) * 100,
+                )
+                return None
+
         leverage = decision.leverage or self._settings.hyperliquid.default_leverage
         leverage = min(leverage, self._settings.risk.max_leverage)
 

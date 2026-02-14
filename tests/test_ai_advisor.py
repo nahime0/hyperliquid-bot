@@ -3,8 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-import subprocess
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 import pytest_asyncio
@@ -359,12 +358,35 @@ class TestDeferredPersistence:
 # ── CLI invocation (mocked) ─────────────────────────────────
 
 
-def _mock_run_factory(stdout: str, returncode: int = 0, stderr: str = ""):
-    """Return a callable that returns a CompletedProcess (for side_effect)."""
-    result = subprocess.CompletedProcess(args=[], returncode=returncode, stdout=stdout, stderr=stderr)
-    def mock_run(*args, **kwargs):
-        return result
-    return mock_run
+def _mock_proc(stdout: str = "", returncode: int = 0, stderr: str = ""):
+    """Create a mock async subprocess that returns given stdout/stderr/returncode."""
+    proc = AsyncMock()
+    proc.returncode = returncode
+    proc.pid = 12345
+    proc.communicate = AsyncMock(return_value=(
+        stdout.encode() if stdout else b"",
+        stderr.encode() if stderr else b"",
+    ))
+    proc.wait = AsyncMock(return_value=returncode)
+    return proc
+
+
+def _patch_claude(stdout: str = "", returncode: int = 0, stderr: str = ""):
+    """Patch asyncio.create_subprocess_exec in cli_claude to return a mock proc."""
+    proc = _mock_proc(stdout, returncode, stderr)
+    return patch(
+        "core.cli_claude.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=proc),
+    )
+
+
+def _patch_cursor(stdout: str = "", returncode: int = 0, stderr: str = ""):
+    """Patch asyncio.create_subprocess_exec in cli_cursor to return a mock proc."""
+    proc = _mock_proc(stdout, returncode, stderr)
+    return patch(
+        "core.cli_cursor.asyncio.create_subprocess_exec",
+        new=AsyncMock(return_value=proc),
+    )
 
 
 class TestConsultMocked:
@@ -377,7 +399,7 @@ class TestConsultMocked:
         }
         response = {"result": "text", "structured_output": batch}
 
-        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory(json.dumps(response))):
+        with _patch_claude(json.dumps(response)):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
                 positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 1.0}],
@@ -392,10 +414,10 @@ class TestConsultMocked:
 
     @pytest.mark.asyncio
     async def test_consult_handles_timeout(self):
-        def slow_run(*args, **kwargs):
-            raise subprocess.TimeoutExpired(cmd="claude", timeout=1)
+        async def slow_exec(*args, **kwargs):
+            raise asyncio.TimeoutError()
 
-        with patch("core.cli_claude.subprocess.run", side_effect=slow_run):
+        with patch("core.cli_claude.asyncio.create_subprocess_exec", new=slow_exec):
             advisor = AIAdvisor(model="haiku", timeout=1)
             result = await advisor.consult(
                 positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
@@ -406,7 +428,7 @@ class TestConsultMocked:
 
     @pytest.mark.asyncio
     async def test_consult_handles_cli_error(self):
-        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory("", returncode=1, stderr="CLI error")):
+        with _patch_claude("", returncode=1, stderr="CLI error"):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
                 positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
@@ -427,7 +449,7 @@ class TestConsultMocked:
         }
         response = {"structured_output": batch}
 
-        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory(json.dumps(response))):
+        with _patch_claude(json.dumps(response)):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
                 positions=[],
@@ -451,7 +473,7 @@ class TestConsultMocked:
 
     @pytest.mark.asyncio
     async def test_consult_handles_empty_output(self):
-        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory("")):
+        with _patch_claude(""):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
                 positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
@@ -462,7 +484,7 @@ class TestConsultMocked:
 
     @pytest.mark.asyncio
     async def test_consult_handles_invalid_json(self):
-        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory("not json at all")):
+        with _patch_claude("not json at all"):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
                 positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
@@ -478,7 +500,7 @@ class TestConsultMocked:
         response = {"structured_output": batch}
         trades = [{"symbol": "ETH", "pnl": 5.0}]
 
-        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory(json.dumps(response))) as mock_run:
+        with _patch_claude(json.dumps(response)) as mock_exec:
             advisor = AIAdvisor(model="haiku", timeout=10)
             await advisor.consult(
                 positions=[],
@@ -487,9 +509,10 @@ class TestConsultMocked:
                 recent_trades=trades,
             )
 
-        call_args = mock_run.call_args
-        cmd_list = call_args[0][0]
-        prompt_arg = cmd_list[2]  # -p <prompt>
+        # The prompt (second positional arg after "claude") should contain recent_trades
+        call_args = mock_exec.call_args
+        cmd_args = call_args[0]  # positional args to create_subprocess_exec
+        prompt_arg = cmd_args[2]  # "claude", "-p", <prompt>, ...
         assert "recent_trades" in prompt_arg
 
     @pytest.mark.asyncio
@@ -501,7 +524,7 @@ class TestConsultMocked:
         }
         response = {"result": "some markdown text", "structured_output": batch}
 
-        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory(json.dumps(response))):
+        with _patch_claude(json.dumps(response)):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
                 positions=[{"symbol": "BTC", "direction": "LONG", "pnl_pct": 2.0}],
@@ -521,7 +544,7 @@ class TestConsultMocked:
         }
         response = {"result": batch}
 
-        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory(json.dumps(response))):
+        with _patch_claude(json.dumps(response)):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
                 positions=[], opportunities=[{"symbol": "ETH", "proposed_action": "SHORT", "confidence": 0.6}],
@@ -536,7 +559,7 @@ class TestConsultMocked:
         batch = {"positions": [{"symbol": "ETH", "action": "HOLD", "reasoning": "wait"}], "opportunities": []}
         response = {"result": json.dumps(batch)}
 
-        with patch("core.cli_claude.subprocess.run", side_effect=_mock_run_factory(json.dumps(response))):
+        with _patch_claude(json.dumps(response)):
             advisor = AIAdvisor(model="haiku", timeout=10)
             result = await advisor.consult(
                 positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
@@ -629,7 +652,7 @@ class TestConsultCursor:
         inner = {"positions": [], "opportunities": [{"symbol": "BTC", "action": "SHORT", "reasoning": "trend"}]}
         stdout = _cursor_wrapper(inner)
 
-        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(stdout)):
+        with _patch_cursor(stdout):
             advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="opus-4.6-thinking", timeout=10))
             result = await advisor.consult(
                 positions=[],
@@ -646,7 +669,7 @@ class TestConsultCursor:
         inner = {"positions": [{"symbol": "ETH", "action": "CLOSE", "reasoning": "reversal"}], "opportunities": []}
         stdout = _cursor_wrapper(inner, fences=True)
 
-        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(stdout)):
+        with _patch_cursor(stdout):
             advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=10))
             result = await advisor.consult(
                 positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": -1.0}],
@@ -662,7 +685,7 @@ class TestConsultCursor:
         inner = {"positions": [], "opportunities": [{"symbol": "SOL", "action": "BUY", "reasoning": "oversold"}]}
         stdout = _cursor_wrapper(inner, fences=True, preamble="Based on analysis:")
 
-        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(stdout)):
+        with _patch_cursor(stdout):
             advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=10))
             result = await advisor.consult(
                 positions=[],
@@ -683,7 +706,7 @@ class TestConsultCursor:
             "result": inner, "session_id": "t", "request_id": "t",
         })
 
-        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(wrapper)):
+        with _patch_cursor(wrapper):
             advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=10))
             result = await advisor.consult(
                 positions=[],
@@ -698,7 +721,7 @@ class TestConsultCursor:
         """Cursor returns is_error: true — graceful fallback."""
         stdout = _cursor_wrapper("Model error: rate limited", is_error=True)
 
-        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(stdout)):
+        with _patch_cursor(stdout):
             advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=10))
             result = await advisor.consult(
                 positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
@@ -713,7 +736,7 @@ class TestConsultCursor:
         """Cursor returns garbage in result string — graceful fallback."""
         stdout = _cursor_wrapper("I'm not sure what to do here, let me think...")
 
-        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(stdout)):
+        with _patch_cursor(stdout):
             advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=10))
             result = await advisor.consult(
                 positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
@@ -725,10 +748,10 @@ class TestConsultCursor:
 
     @pytest.mark.asyncio
     async def test_cursor_timeout(self):
-        def slow(*args, **kwargs):
-            raise subprocess.TimeoutExpired(cmd="agent", timeout=1)
+        async def slow_exec(*args, **kwargs):
+            raise asyncio.TimeoutError()
 
-        with patch("core.cli_cursor.subprocess.run", side_effect=slow):
+        with patch("core.cli_cursor.asyncio.create_subprocess_exec", new=slow_exec):
             advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=1))
             result = await advisor.consult(
                 positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],
@@ -744,7 +767,7 @@ class TestConsultCursor:
         inner = {"positions": [], "opportunities": [{"symbol": "BTC", "action": "BUY", "reasoning": "bounce"}]}
         stdout = _cursor_wrapper(inner, preamble="Here is my analysis:")
 
-        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory(stdout)):
+        with _patch_cursor(stdout):
             advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="test", timeout=10))
             result = await advisor.consult(
                 positions=[],
@@ -757,7 +780,7 @@ class TestConsultCursor:
     @pytest.mark.asyncio
     async def test_cursor_cli_error_exit_code(self):
         """Cursor exits with non-zero — fallback."""
-        with patch("core.cli_cursor.subprocess.run", side_effect=_mock_run_factory("", returncode=1, stderr="model not found")):
+        with _patch_cursor("", returncode=1, stderr="model not found"):
             advisor = AIAdvisor(config=AIConfig(advisor="cursor", model="bad-model", timeout=10))
             result = await advisor.consult(
                 positions=[{"symbol": "ETH", "direction": "LONG", "pnl_pct": 0}],

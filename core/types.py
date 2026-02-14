@@ -19,4 +19,5 @@ class Decision:
     take_profit: float | None = None
     strategy_type: str | None = None  # mean_reversion, rsi_divergence, multi
     leverage: int | None = None  # AI-specified leverage override
+    entry_price_limit: float | None = None  # max for BUY, min for SHORT
     raw_response: str | None = None

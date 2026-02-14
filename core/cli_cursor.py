@@ -4,13 +4,15 @@ Invokes `agent` CLI with --output-format json.  Unlike claude CLI, `agent`
 does not support --json-schema, so the schema is embedded in the prompt.
 The output is wrapped in {"type":"result","result":"..."} and the result
 string may contain markdown fences (```json ... ```).
+Uses asyncio.create_subprocess_exec for proper timeout/cancellation.
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
-import subprocess
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +21,8 @@ from utils.logger import get_logger
 logger = get_logger(__name__)
 
 _FENCE_RE = re.compile(r"```(?:json|JSON)?\s*\n(.*?)\n\s*```", re.DOTALL)
+_EMPTY = {"positions": [], "opportunities": []}
+_KILL_GRACE = 5  # seconds between SIGTERM and SIGKILL
 
 
 def _strip_markdown_fences(text: str) -> str:
@@ -48,6 +52,34 @@ def _strip_markdown_fences(text: str) -> str:
     return stripped
 
 
+async def _kill_process(proc: asyncio.subprocess.Process) -> None:
+    """Kill a subprocess and its entire process group reliably."""
+    if proc.returncode is not None:
+        return  # already exited
+
+    pid = proc.pid
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=_KILL_GRACE)
+        return
+    except asyncio.TimeoutError:
+        pass
+
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2)
+    except asyncio.TimeoutError:
+        logger.error("Failed to kill cursor agent process (pid=%d) — may be orphaned", pid)
+
+
 async def invoke_cursor_cli(
     payload_json: str,
     *,
@@ -59,8 +91,7 @@ async def invoke_cursor_cli(
 ) -> dict[str, Any]:
     """Invoke cursor agent CLI and parse the output.
 
-    The prompt embeds the system prompt + JSON schema + payload since
-    cursor agent doesn't support --json-schema or --system-prompt-file.
+    Uses asyncio subprocess for proper timeout handling and process cleanup.
     """
     system_prompt = prompt_path.read_text()
     schema_content = schema_path.read_text()
@@ -83,29 +114,50 @@ async def invoke_cursor_cli(
 
     logger.debug("Invoking cursor agent CLI (model=%s, payload=%.1f KB)", model, len(payload_json) / 1024)
 
+    proc: asyncio.subprocess.Process | None = None
     try:
-        result = await asyncio.to_thread(
-            subprocess.run,
-            cmd,
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=timeout,
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.DEVNULL,
             start_new_session=True,
             env=env,
         )
-    except subprocess.TimeoutExpired:
-        logger.warning("cursor agent CLI subprocess timed out after %ds", timeout)
-        return {"positions": [], "opportunities": []}
 
-    if result.returncode != 0:
-        logger.warning("cursor agent CLI exit code %d: %s", result.returncode, (result.stderr or "")[:500])
-        return {"positions": [], "opportunities": []}
+        stdout, stderr = await asyncio.wait_for(
+            proc.communicate(),
+            timeout=timeout,
+        )
 
-    output = (result.stdout or "").strip()
+    except asyncio.TimeoutError:
+        logger.warning("cursor agent CLI timed out after %ds — killing process", timeout)
+        if proc is not None:
+            await _kill_process(proc)
+        return _EMPTY
+
+    except asyncio.CancelledError:
+        logger.warning("cursor agent CLI call cancelled — killing process")
+        if proc is not None:
+            await _kill_process(proc)
+        raise
+
+    except Exception:
+        logger.warning("cursor agent CLI failed to launch", exc_info=True)
+        if proc is not None:
+            await _kill_process(proc)
+        return _EMPTY
+
+    if proc.returncode != 0:
+        err = (stderr.decode(errors="replace") if stderr else "")[:500]
+        logger.warning("cursor agent CLI exit code %d: %s", proc.returncode, err)
+        return _EMPTY
+
+    output = (stdout.decode(errors="replace") if stdout else "").strip()
     if not output:
-        logger.warning("cursor agent CLI returned empty output (stderr: %s)", (result.stderr or "")[:300])
-        return {"positions": [], "opportunities": []}
+        err = (stderr.decode(errors="replace") if stderr else "")[:300]
+        logger.warning("cursor agent CLI returned empty output (stderr: %s)", err)
+        return _EMPTY
 
     response = json.loads(output)
 
@@ -113,7 +165,7 @@ async def invoke_cursor_cli(
     if isinstance(response, dict) and response.get("type") == "result":
         if response.get("is_error"):
             logger.warning("cursor agent returned error: %s", str(response.get("result", ""))[:500])
-            return {"positions": [], "opportunities": []}
+            return _EMPTY
         result_val = response.get("result", "")
         if isinstance(result_val, str):
             cleaned = _strip_markdown_fences(result_val)
@@ -121,21 +173,21 @@ async def invoke_cursor_cli(
                 parsed = json.loads(cleaned)
             except json.JSONDecodeError:
                 logger.warning("cursor agent: failed to parse result string as JSON: %.200s", cleaned)
-                return {"positions": [], "opportunities": []}
+                return _EMPTY
         elif isinstance(result_val, dict):
             parsed = result_val
         else:
             logger.warning("cursor agent: unexpected result type: %s", type(result_val))
-            return {"positions": [], "opportunities": []}
+            return _EMPTY
     elif isinstance(response, dict):
         # Direct dict response (no wrapper)
         parsed = response
     else:
         logger.warning("cursor agent: unexpected response type: %s", type(response))
-        return {"positions": [], "opportunities": []}
+        return _EMPTY
 
     if not isinstance(parsed, dict):
         logger.warning("cursor agent returned non-dict: %s", type(parsed))
-        return {"positions": [], "opportunities": []}
+        return _EMPTY
 
     return parsed

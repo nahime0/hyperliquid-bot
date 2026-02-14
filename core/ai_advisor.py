@@ -391,13 +391,19 @@ class AIAdvisor:
                     len(payload_json) / 1024, len(positions), len(opportunities),
                     self._advisor, self._model)
 
+        # Safety net: outer timeout slightly beyond CLI timeout to catch any edge case
+        # (CLI backends handle their own timeout + process cleanup internally)
+        safety_timeout = self._timeout + 15
         try:
             return await asyncio.wait_for(
                 self._invoke_cli(payload_json),
-                timeout=self._timeout,
+                timeout=safety_timeout,
             )
         except asyncio.TimeoutError:
-            logger.warning("AI advisor timed out after %ds — continuing autonomously", self._timeout)
+            logger.error(
+                "AI advisor SAFETY timeout after %ds (CLI should have timed out at %ds) — killing stuck call",
+                safety_timeout, self._timeout,
+            )
             return {"positions": [], "opportunities": []}
         except Exception:
             logger.warning("AI advisor error — continuing autonomously", exc_info=True)
