@@ -41,4 +41,4 @@ data/history/
 data/backtest_results/
 
 # Claude Code
-.claude/
+.claude/settings.local.json
