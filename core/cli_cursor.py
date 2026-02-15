@@ -159,7 +159,13 @@ async def invoke_cursor_cli(
         logger.warning("cursor agent CLI returned empty output (stderr: %s)", err)
         return _EMPTY
 
-    response = json.loads(output)
+    logger.debug("cursor agent raw output (first 500 chars): %.500s", output)
+
+    try:
+        response = json.loads(output)
+    except json.JSONDecodeError:
+        logger.warning("cursor agent: stdout is not valid JSON (first 500 chars): %.500s", output)
+        return _EMPTY
 
     # cursor agent wraps output in {"type":"result","subtype":"success","is_error":false,"result":"..."}
     if isinstance(response, dict) and response.get("type") == "result":
