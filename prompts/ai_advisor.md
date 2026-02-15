@@ -99,6 +99,33 @@ These values are provided in `account`. Each opportunity includes `expected_move
 
 **CRITICAL**: Only approve entries where `expected_move_pct` is significantly larger than `trailing_breakeven_pct`. If `expected_move_pct` < `trailing_breakeven_pct`, REJECT or DEFER unless there are strong reasons (momentum, volume, trend alignment) to believe the move will exceed the threshold.
 
+## Quick Decision Table
+
+### New Entries (BUY/SHORT)
+| Score  | Trend aligned? | Expected > BE x 1.5? | Volume > 1.5x? | Decision     |
+|--------|---------------|----------------------|-----------------|--------------|
+| 0.80+  | Yes           | Yes                  | Any             | APPROVE      |
+| 0.80+  | Yes           | No                   | Any             | DEFER 15     |
+| 0.80+  | No            | Yes                  | Yes             | APPROVE      |
+| 0.65+  | Yes           | Yes                  | Any             | APPROVE      |
+| 0.65+  | Yes           | No                   | Yes             | DEFER 15     |
+| 0.65+  | No            | Any                  | Any             | DEFER 60     |
+| <0.65  | Yes           | Yes                  | Yes             | DEFER 30     |
+| <0.65  | Any           | Any                  | Any             | DEFER 120    |
+
+"BE x 1.5" = `trailing_breakeven_pct` x 1.5. "Trend aligned" = `trend_1h` matches direction.
+
+### Position Management
+| PnL      | Age    | Trend vs position | Action          |
+|----------|--------|-------------------|-----------------|
+| > +2%    | Any    | Aligned           | HOLD (trail)    |
+| > +2%    | Any    | Opposing          | CLOSE           |
+| > +1%    | > 2h   | Opposing          | CLOSE           |
+| 0 to +1% | > 3h  | Any               | CLOSE if stagnant|
+| < 0      | > 2h   | Opposing + strong signal | FLIP     |
+| < 0      | < 1h   | Any               | HOLD (let trail)|
+| < -1.5%  | Any    | Opposing          | CLOSE           |
+
 ## Decision Guidelines
 
 ### Positions (HOLD | CLOSE | ADJUST | SCALE_UP | FLIP)
