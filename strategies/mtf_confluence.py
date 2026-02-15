@@ -12,7 +12,7 @@ LONG Entry scoring:
   - Volume ratio >= 1.0 (5m candles)       -> +0.10
   - |funding| < max_funding_rate           -> +0.10
   - No per-symbol cooldown                 -> +0.10
-  Score >= 0.50 -> generate signal (confidence = score)
+  Score >= 0.60 -> generate signal (confidence = score)
 
 SHORT Entry scoring (mirrored):
   - 5m RSI > mtf_rsi_overbought            -> +0.25
@@ -27,9 +27,9 @@ Hard blocks (always reject, bypass scoring):
   - Global cooldown active (3+ consecutive losses)
   - Fresh per-symbol cooldown (loss < 10 min ago)
 
-Exit (ANY timeframe divergence):
-  - LONG exit: RSI(5m) > overbought OR 15m RSI slope < 0 OR 1h trend != BULLISH
-  - SHORT exit: RSI(5m) < oversold OR 15m RSI slope > 0 OR 1h trend != BEARISH
+Exit (2-of-3 timeframe divergence):
+  - LONG exit: 2+ of {RSI(5m) > overbought, 15m RSI slope < 0, 1h trend != BULLISH}
+  - SHORT exit: 2+ of {RSI(5m) < oversold, 15m RSI slope > 0, 1h trend != BEARISH}
 """
 from __future__ import annotations
 
@@ -186,7 +186,7 @@ class MtfConfluenceStrategy(Strategy):
                 if len(rsi_15m_series) >= slope_bars + 1 and pd.notna(rsi_15m_series.iloc[-slope_bars]):
                     rsi_15m_slope = (
                         float(rsi_15m_series.iloc[-1]) - float(rsi_15m_series.iloc[-slope_bars])
-                    ) / slope_bars
+                    ) / (slope_bars - 1)
 
             # ── Volume ratio on 5m ──
             vol_ratio: float | None = None
@@ -453,11 +453,14 @@ class MtfConfluenceStrategy(Strategy):
     # -- Exit checks --
 
     def _check_long_exit(self, symbol: str, sig: MtfSignal) -> Decision | None:
-        """Exit LONG if any timeframe diverges from the entry thesis."""
+        """Exit LONG if 2+ of 3 timeframes diverge from the entry thesis.
+
+        Entry requires ALL 3 aligned (AND). Using ANY for exit (OR) causes
+        ~49% exit probability per cycle. Require 2-of-3 to diverge for symmetry.
+        """
         reasons: list[str] = []
 
         rsi_overbought = self._sc.mtf_rsi_overbought
-        rsi_oversold = self._sc.mtf_rsi_oversold
 
         # 5m RSI crossed overbought
         if sig.rsi_5m is not None and sig.rsi_5m > rsi_overbought:
@@ -471,20 +474,29 @@ class MtfConfluenceStrategy(Strategy):
         if sig.trend_1h != "BULLISH":
             reasons.append(f"trend_1h={sig.trend_1h}")
 
-        if not reasons:
+        # If indicator data is unavailable, lower exit threshold
+        available_checks = sum([
+            sig.rsi_5m is not None,
+            sig.rsi_15m_slope is not None,
+            True,  # trend_1h is always available
+        ])
+        min_divergences = 2 if available_checks >= 3 else 1
+
+        # Require sufficient divergences to exit
+        if len(reasons) < min_divergences:
             return None
 
         return Decision(
             action="CLOSE",
             symbol=symbol,
             confidence=0.8,
-            reasoning=f"[MtfConfl LONG EXIT] {symbol}: {', '.join(reasons)}",
+            reasoning=f"[MtfConfl LONG EXIT] {symbol}: {len(reasons)}/3 diverged — {', '.join(reasons)}",
             strategy_type=self.strategy_type,
             order_type="MARKET",
         )
 
     def _check_short_exit(self, symbol: str, sig: MtfSignal) -> Decision | None:
-        """Exit SHORT if any timeframe diverges from the entry thesis."""
+        """Exit SHORT if 2+ of 3 timeframes diverge from the entry thesis."""
         reasons: list[str] = []
 
         rsi_oversold = self._sc.mtf_rsi_oversold
@@ -501,14 +513,23 @@ class MtfConfluenceStrategy(Strategy):
         if sig.trend_1h != "BEARISH":
             reasons.append(f"trend_1h={sig.trend_1h}")
 
-        if not reasons:
+        # If indicator data is unavailable, lower exit threshold
+        available_checks = sum([
+            sig.rsi_5m is not None,
+            sig.rsi_15m_slope is not None,
+            True,  # trend_1h is always available
+        ])
+        min_divergences = 2 if available_checks >= 3 else 1
+
+        # Require sufficient divergences to exit
+        if len(reasons) < min_divergences:
             return None
 
         return Decision(
             action="CLOSE",
             symbol=symbol,
             confidence=0.8,
-            reasoning=f"[MtfConfl SHORT EXIT] {symbol}: {', '.join(reasons)}",
+            reasoning=f"[MtfConfl SHORT EXIT] {symbol}: {len(reasons)}/3 diverged — {', '.join(reasons)}",
             strategy_type=self.strategy_type,
             order_type="MARKET",
         )

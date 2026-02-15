@@ -10,7 +10,7 @@ LONG Entry scoring (bullish divergence: price lower low + histogram higher low):
   - 1h trend alignment (not BEARISH) -> +0.15
   - |funding| < max_funding_rate     -> +0.10
   - No per-symbol cooldown           -> +0.10
-  Score >= 0.50 -> generate signal (confidence = score)
+  Score >= 0.60 -> generate signal (confidence = score)
 
 SHORT Entry scoring (bearish divergence: price higher high + histogram lower high):
   - Divergence strength              -> +0.30
@@ -25,9 +25,9 @@ Hard blocks (always reject, bypass scoring):
   - Global cooldown active (3+ consecutive losses)
   - Fresh per-symbol cooldown (loss < 10 min ago)
 
-Exit:
-  - LONG exit: MACD histogram < 0 (crossed zero going negative)
-  - SHORT exit: MACD histogram > 0 (crossed zero going positive)
+Exit (zero-cross with state tracking):
+  - LONG exit: histogram was positive at some point, then crosses to negative
+  - SHORT exit: histogram was negative at some point, then crosses to positive
 """
 from __future__ import annotations
 
@@ -78,6 +78,7 @@ class MacdDivSignal:
     divergence_type: str | None   # "BULLISH", "BEARISH", None
     divergence_strength: float | None
     histogram_rising: bool
+    histogram_falling: bool       # strictly falling (hist < prev), False when flat
     histogram_value: float | None
     volume_ratio: float | None
     trend_1h: str
@@ -119,6 +120,12 @@ class MacdDivergenceStrategy(Strategy):
         self._swing_window = strategy_config.macd_div_swing_window
         self._recency = strategy_config.macd_div_recency
 
+        # State tracking for zero-cross exit logic:
+        # Track whether histogram has been favorable since entry
+        # LONG: histogram was positive at some point -> exit when crosses to negative
+        # SHORT: histogram was negative at some point -> exit when crosses to positive
+        self._hist_favorable_seen: dict[str, bool] = {}
+
     @property
     def strategy_type(self) -> str:
         return "macd_divergence"
@@ -148,6 +155,7 @@ class MacdDivergenceStrategy(Strategy):
 
     async def stop(self) -> None:
         self._signals.clear()
+        self._hist_favorable_seen.clear()
         logger.info("MacdDivergenceStrategy stopped")
 
     # -- Update (called every tick) --
@@ -188,6 +196,7 @@ class MacdDivergenceStrategy(Strategy):
             # Histogram direction: compare last bar to previous bar
             hist_prev = float(histogram.iloc[-2]) if len(histogram) >= 2 and pd.notna(histogram.iloc[-2]) else None
             histogram_rising = hist_value > hist_prev if hist_prev is not None else False
+            histogram_falling = hist_value < hist_prev if hist_prev is not None else False
 
             # Volume ratio
             vol_sma = float(volume.rolling(VOLUME_SMA_PERIOD).mean().iloc[-1]) if len(volume) >= VOLUME_SMA_PERIOD else None
@@ -205,6 +214,7 @@ class MacdDivergenceStrategy(Strategy):
                 divergence_type=divergence_type,
                 divergence_strength=divergence_strength,
                 histogram_rising=histogram_rising,
+                histogram_falling=histogram_falling,
                 histogram_value=round(hist_value, 6),
                 volume_ratio=round(vol_ratio, 2) if vol_ratio else None,
                 trend_1h=trend_1h,
@@ -270,13 +280,15 @@ class MacdDivergenceStrategy(Strategy):
                 swing_highs.append(i)
 
         # Check bullish divergence (last 2 swing lows)
+        # Use ±2 bar window around price swing to capture local histogram minimum
+        n_hist = len(histogram)
         if len(swing_lows) >= 2:
             prev_i = swing_lows[-2]
             curr_i = swing_lows[-1]
             prev_price = float(close.iloc[prev_i])
             curr_price = float(close.iloc[curr_i])
-            prev_hist = float(histogram.iloc[prev_i])
-            curr_hist = float(histogram.iloc[curr_i])
+            prev_hist = float(histogram.iloc[max(0, prev_i - 2):min(n_hist, prev_i + 3)].min())
+            curr_hist = float(histogram.iloc[max(0, curr_i - 2):min(n_hist, curr_i + 3)].min())
 
             # Price lower low + histogram higher low = bullish divergence
             if curr_price < prev_price and curr_hist > prev_hist:
@@ -286,13 +298,14 @@ class MacdDivergenceStrategy(Strategy):
                 return "BULLISH", strength
 
         # Check bearish divergence (last 2 swing highs)
+        # Use ±2 bar window around price swing to capture local histogram maximum
         if len(swing_highs) >= 2:
             prev_i = swing_highs[-2]
             curr_i = swing_highs[-1]
             prev_price = float(close.iloc[prev_i])
             curr_price = float(close.iloc[curr_i])
-            prev_hist = float(histogram.iloc[prev_i])
-            curr_hist = float(histogram.iloc[curr_i])
+            prev_hist = float(histogram.iloc[max(0, prev_i - 2):min(n_hist, prev_i + 3)].max())
+            curr_hist = float(histogram.iloc[max(0, curr_i - 2):min(n_hist, curr_i + 3)].max())
 
             # Price higher high + histogram lower high = bearish divergence
             if curr_price > prev_price and curr_hist < prev_hist:
@@ -386,24 +399,50 @@ class MacdDivergenceStrategy(Strategy):
         return decisions
 
     def _check_exit(self, symbol: str, sig: MacdDivSignal, direction: str) -> Decision | None:
-        """Check if a position should be closed based on histogram zero-cross."""
+        """Check if a position should be closed based on histogram zero-cross.
+
+        Bullish divergence entries occur when histogram is already negative (higher
+        low in negative territory). So we can't just check histogram < 0 — that's
+        the entry condition! Instead, track whether histogram has been favorable
+        (positive for LONG, negative for SHORT) since entry, then exit on the
+        actual zero-cross transition back.
+        """
         if sig.histogram_value is None:
             return None
 
-        reasons: list[str] = []
-        if direction == "LONG" and sig.histogram_value < 0:
-            reasons.append(f"histogram={sig.histogram_value:.6f}<0")
-        elif direction == "SHORT" and sig.histogram_value > 0:
-            reasons.append(f"histogram={sig.histogram_value:.6f}>0")
+        seen = self._hist_favorable_seen.get(symbol, False)
 
-        if not reasons:
+        if direction == "LONG":
+            # Track: has histogram been positive since entry?
+            if sig.histogram_value > 0:
+                self._hist_favorable_seen[symbol] = True
+                return None  # histogram positive — hold
+            # Histogram is <= 0
+            if not self._hist_favorable_seen.get(symbol, False):
+                return None  # never was positive yet — still building, hold
+            # Was positive, now crossed to negative — exit
+            reason = f"histogram_zero_cross(was_positive, now={sig.histogram_value:.6f})"
+        elif direction == "SHORT":
+            # Track: has histogram been negative since entry?
+            if sig.histogram_value < 0:
+                self._hist_favorable_seen[symbol] = True
+                return None  # histogram negative — hold
+            # Histogram is >= 0
+            if not self._hist_favorable_seen.get(symbol, False):
+                return None  # never was negative yet — still building, hold
+            # Was negative, now crossed to positive — exit
+            reason = f"histogram_zero_cross(was_negative, now={sig.histogram_value:.6f})"
+        else:
             return None
+
+        # Clean up state on exit
+        self._hist_favorable_seen.pop(symbol, None)
 
         return Decision(
             action="CLOSE",
             symbol=symbol,
             confidence=0.8,
-            reasoning=f"[MacdDiv {direction} EXIT] {symbol}: {', '.join(reasons)}",
+            reasoning=f"[MacdDiv {direction} EXIT] {symbol}: {reason}",
             strategy_type="macd_divergence",
             order_type="MARKET",
         )
@@ -481,7 +520,7 @@ class MacdDivergenceStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[MD LONG] %s: score=%.3f -- %s", symbol, score, ", ".join(components))
-        expected_move = sig.divergence_strength * 2.0
+        expected_move = (sig.divergence_strength if sig.divergence_strength is not None else 0.0) * 3.0
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -527,8 +566,8 @@ class MacdDivergenceStrategy(Strategy):
         score += W_DIVERGENCE * intensity
         components.append(f"div_str={intensity:.2f}")
 
-        # Histogram direction: should be falling for bearish
-        if not sig.histogram_rising:
+        # Histogram direction: should be strictly falling for bearish (not flat)
+        if sig.histogram_falling:
             score += W_HISTOGRAM
             components.append("hist_falling")
 
@@ -570,7 +609,7 @@ class MacdDivergenceStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[MD SHORT] %s: score=%.3f -- %s", symbol, score, ", ".join(components))
-        expected_move = sig.divergence_strength * 2.0
+        expected_move = (sig.divergence_strength if sig.divergence_strength is not None else 0.0) * 3.0
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -606,7 +645,7 @@ class MacdDivergenceStrategy(Strategy):
                     "histogram_rising": sig.histogram_rising,
                     "volume_ratio": sig.volume_ratio,
                     "trend_1h": sig.trend_1h,
-                    "expected_move_pct": round(sig.divergence_strength * 2.0, 2) if sig.divergence_strength is not None else None,
+                    "expected_move_pct": round(sig.divergence_strength * 3.0, 2) if sig.divergence_strength is not None else None,
                 },
             )
         except Exception:

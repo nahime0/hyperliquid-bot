@@ -11,7 +11,7 @@ BUY Entry scoring (breakout above resistance):
   - clean_break (all confirm bars above)      -> +0.10
   - |funding| < max_funding_rate              -> +0.10
   - No per-symbol cooldown                    -> +0.10
-  Score >= 0.50 -> generate signal (confidence = score)
+  Score >= 0.60 -> generate signal (confidence = score)
 
 SHORT Entry scoring (breakout below support):
   - breakout_strength (distance past level)   -> +0.25
@@ -110,6 +110,11 @@ class BreakoutStrategy(Strategy):
         self._max_funding_rate: float = 0.0005
         self._db = db
         self._cycle_count: int = 0
+        # Store S/R levels at entry time per symbol (resistance, support)
+        # so exits use frozen levels, not recalculated ones
+        self._entry_levels: dict[str, tuple[float, float]] = {}
+        # Track signaled breakout levels to avoid re-signaling same level
+        self._signaled_levels: dict[str, tuple[float, str]] = {}  # symbol -> (level, direction)
 
     # -- Setters --
 
@@ -140,6 +145,8 @@ class BreakoutStrategy(Strategy):
 
     async def stop(self) -> None:
         self._signals.clear()
+        self._entry_levels.clear()
+        self._signaled_levels.clear()
         logger.info("BreakoutStrategy stopped")
 
     # -- Update (called every tick) --
@@ -221,6 +228,17 @@ class BreakoutStrategy(Strategy):
                 else:
                     clean_break = True
 
+            # Staleness check for breakout levels
+            if breakout_dir is None:
+                self._signaled_levels.pop(symbol, None)
+            else:
+                # Skip if same level already signaled
+                signaled = self._signaled_levels.get(symbol)
+                if signaled and abs(signaled[0] - (resistance if breakout_dir == "UP" else support)) / signaled[0] < 0.001 and signaled[1] == breakout_dir:
+                    return  # Same level already signaled
+                # Record this level
+                self._signaled_levels[symbol] = (resistance if breakout_dir == "UP" else support, breakout_dir)
+
             self._signals[symbol] = BreakoutSignal(
                 symbol=symbol,
                 breakout_dir=breakout_dir,
@@ -282,12 +300,18 @@ class BreakoutStrategy(Strategy):
 
             entry = self._check_long_entry(symbol, sig)
             if entry:
+                # Freeze S/R levels at entry time
+                if sig.resistance is not None and sig.support is not None:
+                    self._entry_levels[symbol] = (sig.resistance, sig.support)
                 decisions.append(entry)
                 await self._log_signal(entry, sig)
                 continue  # one direction per coin per cycle
 
             entry = self._check_short_entry(symbol, sig)
             if entry:
+                # Freeze S/R levels at entry time
+                if sig.resistance is not None and sig.support is not None:
+                    self._entry_levels[symbol] = (sig.resistance, sig.support)
                 decisions.append(entry)
                 await self._log_signal(entry, sig)
 
@@ -301,18 +325,28 @@ class BreakoutStrategy(Strategy):
     # -- Exit checks --
 
     def _check_long_exit(self, symbol: str, sig: BreakoutSignal) -> Decision | None:
-        """Exit LONG if price drops back below resistance (failed breakout)."""
-        if sig.price is None or sig.resistance is None:
+        """Exit LONG if price drops back below the entry-time resistance (failed breakout).
+
+        Uses frozen S/R levels from entry, not recalculated rolling values.
+        """
+        if sig.price is None:
             return None
 
-        if sig.price < sig.resistance:
+        # Use entry-time resistance, fall back to current if not stored
+        entry_levels = self._entry_levels.get(symbol)
+        resistance = entry_levels[0] if entry_levels else sig.resistance
+        if resistance is None:
+            return None
+
+        if sig.price < resistance:
+            self._entry_levels.pop(symbol, None)  # clean up on exit
             return Decision(
                 action="CLOSE",
                 symbol=symbol,
                 confidence=0.8,
                 reasoning=(
                     f"[Breakout LONG EXIT] {symbol}: price={sig.price:.4f} "
-                    f"dropped below resistance={sig.resistance:.4f} (failed breakout)"
+                    f"dropped below entry_resistance={resistance:.4f} (failed breakout)"
                 ),
                 strategy_type="breakout",
                 order_type="MARKET",
@@ -320,18 +354,28 @@ class BreakoutStrategy(Strategy):
         return None
 
     def _check_short_exit(self, symbol: str, sig: BreakoutSignal) -> Decision | None:
-        """Exit SHORT if price rises back above support (failed breakout)."""
-        if sig.price is None or sig.support is None:
+        """Exit SHORT if price rises back above the entry-time support (failed breakout).
+
+        Uses frozen S/R levels from entry, not recalculated rolling values.
+        """
+        if sig.price is None:
             return None
 
-        if sig.price > sig.support:
+        # Use entry-time support, fall back to current if not stored
+        entry_levels = self._entry_levels.get(symbol)
+        support = entry_levels[1] if entry_levels else sig.support
+        if support is None:
+            return None
+
+        if sig.price > support:
+            self._entry_levels.pop(symbol, None)  # clean up on exit
             return Decision(
                 action="CLOSE",
                 symbol=symbol,
                 confidence=0.8,
                 reasoning=(
                     f"[Breakout SHORT EXIT] {symbol}: price={sig.price:.4f} "
-                    f"rose above support={sig.support:.4f} (failed breakout)"
+                    f"rose above entry_support={support:.4f} (failed breakout)"
                 ),
                 strategy_type="breakout",
                 order_type="MARKET",
@@ -436,7 +480,8 @@ class BreakoutStrategy(Strategy):
         strength_str = f"{sig.breakout_strength:.2f}%" if sig.breakout_strength is not None else "N/A"
 
         logger.debug("[BO LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
-        expected_move = sig.breakout_strength if sig.breakout_strength is not None else 0.0
+        # Breakout strength is distance already traveled; expected FUTURE move is based on the range
+        expected_move = max(0.5, (sig.resistance - sig.support) / sig.price * 100 if sig.resistance and sig.support and sig.price and sig.price > 0 else 1.0)
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -548,7 +593,8 @@ class BreakoutStrategy(Strategy):
         strength_str = f"{sig.breakout_strength:.2f}%" if sig.breakout_strength is not None else "N/A"
 
         logger.debug("[BO SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
-        expected_move = sig.breakout_strength if sig.breakout_strength is not None else 0.0
+        # Breakout strength is distance already traveled; expected FUTURE move is based on the range
+        expected_move = max(0.5, (sig.resistance - sig.support) / sig.price * 100 if sig.resistance and sig.support and sig.price and sig.price > 0 else 1.0)
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -587,7 +633,7 @@ class BreakoutStrategy(Strategy):
                     "clean_break": sig.clean_break,
                     "volume_ratio": sig.volume_ratio,
                     "trend_1h": sig.trend_1h,
-                    "expected_move_pct": round(sig.breakout_strength, 2) if sig.breakout_strength is not None else None,
+                    "expected_move_pct": round(max(0.5, (sig.resistance - sig.support) / sig.price * 100 if sig.resistance and sig.support and sig.price and sig.price > 0 else 1.0), 2),
                 },
             )
         except Exception:

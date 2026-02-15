@@ -11,7 +11,7 @@ LONG Entry scoring (breakout UP after squeeze):
   - 1h trend BULLISH (TrendFilter)         -> +0.10
   - |funding| < max_funding_rate           -> +0.10
   - No per-symbol cooldown                 -> +0.10
-  Score >= 0.50 -> generate signal (confidence = score)
+  Score >= 0.60 -> generate signal (confidence = score)
 
 SHORT Entry scoring (breakout DOWN after squeeze):
   - Squeeze tightness (tight bandwidth)    -> +0.25
@@ -379,7 +379,9 @@ class BbSqueezeStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[BBS LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
-        expected_move = (sig.bb_upper - sig.bb_lower) / sig.bb_mid * 100
+        # Squeeze thesis: tighter squeeze → bigger expected move
+        # Use inverse of squeeze tightness: very tight (1.0) → bigger move
+        expected_move = (sig.squeeze_tightness if sig.squeeze_tightness is not None else 0.5) * 3.0
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -466,7 +468,9 @@ class BbSqueezeStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[BBS SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
-        expected_move = (sig.bb_upper - sig.bb_lower) / sig.bb_mid * 100
+        # Squeeze thesis: tighter squeeze → bigger expected move
+        # Use inverse of squeeze tightness: very tight (1.0) → bigger move
+        expected_move = (sig.squeeze_tightness if sig.squeeze_tightness is not None else 0.5) * 3.0
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -482,9 +486,20 @@ class BbSqueezeStrategy(Strategy):
         )
 
     def _check_long_exit(self, symbol: str, sig: BbsSignal) -> Decision | None:
-        """Exit LONG if price drops below BB midline."""
+        """Exit LONG if price drops below BB midline AND bands have expanded.
+
+        Entry happens during squeeze (tight bands). If bands are still squeezed,
+        price and midline are nearly the same, so midline exit triggers immediately.
+        Wait for bandwidth to expand (> 2%) before using midline as exit reference.
+        """
         if sig.price is None or sig.bb_mid is None:
             return None
+
+        # Check bandwidth expansion: bands must have expanded from squeeze
+        if sig.bb_upper is not None and sig.bb_lower is not None and sig.bb_mid > 0:
+            bandwidth_pct = (sig.bb_upper - sig.bb_lower) / sig.bb_mid * 100
+            if bandwidth_pct < 2.0:
+                return None  # bands still tight — wait for expansion
 
         if sig.price < sig.bb_mid:
             return Decision(
@@ -498,9 +513,15 @@ class BbSqueezeStrategy(Strategy):
         return None
 
     def _check_short_exit(self, symbol: str, sig: BbsSignal) -> Decision | None:
-        """Exit SHORT if price rises above BB midline."""
+        """Exit SHORT if price rises above BB midline AND bands have expanded."""
         if sig.price is None or sig.bb_mid is None:
             return None
+
+        # Check bandwidth expansion
+        if sig.bb_upper is not None and sig.bb_lower is not None and sig.bb_mid > 0:
+            bandwidth_pct = (sig.bb_upper - sig.bb_lower) / sig.bb_mid * 100
+            if bandwidth_pct < 2.0:
+                return None  # bands still tight — wait for expansion
 
         if sig.price > sig.bb_mid:
             return Decision(
@@ -536,7 +557,7 @@ class BbSqueezeStrategy(Strategy):
                     "bb_upper": sig.bb_upper,
                     "bb_lower": sig.bb_lower,
                     "bb_mid": sig.bb_mid,
-                    "expected_move_pct": round((sig.bb_upper - sig.bb_lower) / sig.bb_mid * 100, 2) if sig.bb_upper and sig.bb_lower and sig.bb_mid else None,
+                    "expected_move_pct": round((sig.squeeze_tightness if sig.squeeze_tightness is not None else 0.5) * 3.0, 2),
                 },
             )
         except Exception:

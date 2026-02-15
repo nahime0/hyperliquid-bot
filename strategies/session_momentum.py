@@ -16,7 +16,7 @@ BUY Entry scoring (positive momentum from prior session):
   - 1h trend alignment (BULLISH)                   -> +0.15
   - |funding| < max_funding_rate                   -> +0.10
   - No per-symbol cooldown                         -> +0.10
-  Score >= 0.50 -> generate signal (confidence = score)
+  Score >= 0.60 -> generate signal (confidence = score)
 
 SHORT Entry scoring (negative momentum from prior session):
   - Prior session change < -sm_min_session_change  -> +0.30 (session_momentum)
@@ -63,7 +63,7 @@ logger = get_logger(__name__)
 
 # -- Scoring weights --
 W_SESSION_MOMENTUM = 0.30   # prior session change meets threshold
-W_OVERNIGHT_CHANGE = 0.20   # RSI confirms direction (not extreme opposite)
+W_RSI_CONFIRM = 0.20   # RSI confirms direction (not extreme opposite)
 W_VOLUME = 0.15              # volume ratio >= threshold
 W_TREND = 0.15               # 1h trend alignment
 W_FUNDING = 0.10             # funding rate acceptable
@@ -127,6 +127,7 @@ class SessionMomentumStrategy(Strategy):
         # Session state (computed once per update)
         self._current_session: str = ""
         self._in_entry_window: bool = False
+        self._hour_in_session: int = 0
 
     def set_coins(self, coins: list[str]) -> None:
         self._coins = coins
@@ -156,11 +157,11 @@ class SessionMomentumStrategy(Strategy):
     # -- Session detection --
 
     @staticmethod
-    def _detect_session() -> tuple[str, bool, int]:
-        """Detect current trading session and whether we are in the entry window.
+    def _detect_session() -> tuple[str, int, int]:
+        """Detect current trading session and position within it.
 
         Returns:
-            (session_name, in_entry_window, hour_in_session)
+            (session_name, hour_in_session, hour)
         """
         now = datetime.now(timezone.utc)
         hour = now.hour
@@ -182,6 +183,7 @@ class SessionMomentumStrategy(Strategy):
         # Compute session info once per cycle
         session, hour_in_session, _hour = self._detect_session()
         self._current_session = session
+        self._hour_in_session = hour_in_session
         self._in_entry_window = hour_in_session < self._sc.sm_entry_window_hours
 
         tasks = [self._scan_coin(sym) for sym in self._coins]
@@ -204,8 +206,8 @@ class SessionMomentumStrategy(Strategy):
                 if volume_usdc < self._min_candle_volume_usdc:
                     return
 
-            # Prior session change: change over last 8 x 1h candles
-            session_change = self._compute_session_change(close)
+            # Prior session change (actual prior session, not rolling window)
+            session_change = self._compute_session_change(close, self._hour_in_session)
 
             # Volume ratio
             vol_sma = float(volume.rolling(20).mean().iloc[-1]) if len(volume) >= 20 else None
@@ -236,18 +238,25 @@ class SessionMomentumStrategy(Strategy):
             logger.exception("Error scanning %s for session momentum", symbol)
 
     @staticmethod
-    def _compute_session_change(close: pd.Series) -> float | None:
-        """Compute % change over last 8 hours (one session) from 1h candles.
+    def _compute_session_change(close: pd.Series, hour_in_session: int) -> float | None:
+        """Compute the prior session's price change (not rolling).
 
-        Uses close[-1] vs close[-9]: the change spanning 8 hourly bars.
+        Instead of a rolling 8h window (which gets contaminated by the current
+        session), this looks back to the start of the current session, then
+        measures the change over the 8 bars before that.
         """
-        if len(close) < SESSION_BARS + 1:
+        # Need: 8 bars of prior session + hours into current session
+        needed = SESSION_BARS + hour_in_session + 1
+        if len(close) < needed:
             return None
-        price_now = float(close.iloc[-1])
-        price_session_ago = float(close.iloc[-(SESSION_BARS + 1)])
-        if price_session_ago <= 0:
+        # Start of current session = hour_in_session bars ago
+        # Prior session: from (hour_in_session + SESSION_BARS) ago to (hour_in_session) ago
+        session_start_idx = -(hour_in_session + 1) if hour_in_session > 0 else -1
+        prior_session_end = float(close.iloc[session_start_idx])
+        prior_session_start = float(close.iloc[-(hour_in_session + SESSION_BARS + 1)])
+        if prior_session_start == 0:
             return None
-        return (price_now - price_session_ago) / price_session_ago * 100
+        return (prior_session_end - prior_session_start) / prior_session_start * 100
 
     # -- Decision generation --
 
@@ -346,7 +355,7 @@ class SessionMomentumStrategy(Strategy):
 
         # Overnight/direction confirmation via RSI (not extreme opposite)
         if sig.rsi is not None and sig.rsi > RSI_CONFIRM_HIGH:
-            score += W_OVERNIGHT_CHANGE
+            score += W_RSI_CONFIRM
             components.append(f"RSI={sig.rsi:.1f}>={RSI_CONFIRM_HIGH:.0f}")
 
         # Volume
@@ -384,7 +393,7 @@ class SessionMomentumStrategy(Strategy):
         rsi_str = f"{sig.rsi:.1f}" if sig.rsi is not None else "N/A"
 
         logger.debug("[SM LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
-        expected_move = abs(sig.session_change)
+        expected_move = abs(sig.session_change) * 0.5
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -433,7 +442,7 @@ class SessionMomentumStrategy(Strategy):
 
         # Overnight/direction confirmation via RSI (not extreme opposite)
         if sig.rsi is not None and sig.rsi < RSI_CONFIRM_LOW:
-            score += W_OVERNIGHT_CHANGE
+            score += W_RSI_CONFIRM
             components.append(f"RSI={sig.rsi:.1f}<={RSI_CONFIRM_LOW:.0f}")
 
         # Volume
@@ -471,7 +480,7 @@ class SessionMomentumStrategy(Strategy):
         rsi_str = f"{sig.rsi:.1f}" if sig.rsi is not None else "N/A"
 
         logger.debug("[SM SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
-        expected_move = abs(sig.session_change)
+        expected_move = abs(sig.session_change) * 0.5
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -491,7 +500,7 @@ class SessionMomentumStrategy(Strategy):
 
         Exit triggers:
           1. Position held for >= sm_exit_hours
-          2. Momentum reversal: price reversed by > sm_min_session_change from entry
+          2. Momentum reversal: price reversed by > 1.5x sm_min_session_change from entry
         """
         reasons: list[str] = []
         direction = pos.get("direction", "LONG")
@@ -500,20 +509,31 @@ class SessionMomentumStrategy(Strategy):
 
         # Time-based exit
         if opened_at:
-            age_hours = (time.time() - opened_at) / 3600.0
-            if age_hours >= self._sc.sm_exit_hours:
-                reasons.append(f"age={age_hours:.1f}h>={self._sc.sm_exit_hours}h")
+            # opened_at can be ISO string or float timestamp
+            if isinstance(opened_at, str):
+                try:
+                    opened_ts = datetime.fromisoformat(opened_at).timestamp()
+                except (ValueError, TypeError):
+                    opened_ts = None
+            else:
+                opened_ts = float(opened_at)
 
-        # Momentum reversal exit
+            if opened_ts is not None:
+                age_hours = (time.time() - opened_ts) / 3600.0
+                if age_hours >= self._sc.sm_exit_hours:
+                    reasons.append(f"age={age_hours:.1f}h>={self._sc.sm_exit_hours}h")
+
+        # Momentum reversal exit — use 1.5x session change as threshold
+        # to avoid closing on minor noise within the normal session range
+        reversal_threshold = self._sc.sm_min_session_change * 1.5
         if entry_price and sig.price and entry_price > 0:
             pnl_pct = (sig.price - entry_price) / entry_price * 100
             if direction == "SHORT":
                 pnl_pct = -pnl_pct
 
-            # If price moved against us by more than the min session change
-            if pnl_pct < -self._sc.sm_min_session_change:
+            if pnl_pct < -reversal_threshold:
                 reasons.append(
-                    f"momentum_reversal(pnl={pnl_pct:.2f}%<-{self._sc.sm_min_session_change}%)"
+                    f"momentum_reversal(pnl={pnl_pct:.2f}%<-{reversal_threshold:.2f}%)"
                 )
 
         if not reasons:
@@ -548,7 +568,7 @@ class SessionMomentumStrategy(Strategy):
                     "rsi": round(sig.rsi, 2) if sig.rsi is not None else None,
                     "trend_1h": sig.trend_1h,
                     "volume_ratio": sig.volume_ratio,
-                    "expected_move_pct": round(abs(sig.session_change), 2) if sig.session_change is not None else None,
+                    "expected_move_pct": round(abs(sig.session_change) * 0.5, 2) if sig.session_change is not None else None,
                 },
             )
         except Exception:

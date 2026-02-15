@@ -34,6 +34,12 @@ class MultiStrategy(Strategy):
             if hasattr(s, "set_cycle"):
                 s.set_cycle(cycle)
 
+    def set_funding_rates(self, rates: dict[str, float]) -> None:
+        """Propagate funding rates to all sub-strategies."""
+        for s in self._strategies:
+            if hasattr(s, "set_funding_rates"):
+                s.set_funding_rates(rates)
+
     # -- Lifecycle --
 
     async def start(self) -> None:

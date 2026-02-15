@@ -8,16 +8,16 @@ LONG Entry scoring (very negative funding → crowded shorts):
   - Funding extremity past threshold     → +0.30
   - RSI < 50 (price depressed)           → +0.20
   - Volume ratio >= 1.0                  → +0.15
-  - 1h trend not opposing (not BULLISH)  → +0.15
+  - 1h trend not opposing (not BEARISH)  → +0.15
   - No per-symbol cooldown               → +0.10
   - Volume ratio >= 1.5 (crowded proxy)  → +0.10
-  Score >= 0.50 → generate signal (confidence = score)
+  Score >= 0.60 → generate signal (confidence = score)
 
 SHORT Entry scoring (very positive funding → crowded longs):
   - Funding extremity past threshold     → +0.30
   - RSI > 50 (price elevated)            → +0.20
   - Volume ratio >= 1.0                  → +0.15
-  - 1h trend not opposing (not BEARISH)  → +0.15
+  - 1h trend not opposing (not BULLISH)  → +0.15
   - No per-symbol cooldown               → +0.10
   - Volume ratio >= 1.5 (crowded proxy)  → +0.10
 

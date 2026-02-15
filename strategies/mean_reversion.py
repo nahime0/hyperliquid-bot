@@ -1,7 +1,7 @@
 """Mean Reversion — scoring-based decision generator.
 
 Generates BUY/SHORT/SELL/CLOSE decisions using a scoring system.
-Each condition contributes a weighted score; signal fires when score >= 0.50.
+Each condition contributes a weighted score; signal fires when score >= 0.60.
 The AI reviews every signal and makes the final call.
 
 LONG Entry scoring:
@@ -11,7 +11,7 @@ LONG Entry scoring:
   - RSI on 1h < 60 (macro align)  → +0.15
   - |funding| < max_funding_rate   → +0.10
   - No per-symbol cooldown         → +0.10
-  Score >= 0.50 → generate signal (confidence = score)
+  Score >= 0.60 → generate signal (confidence = score)
 
 SHORT Entry scoring (mirrored):
   - RSI(14) > 65 on 15m           → +0.25
@@ -344,7 +344,7 @@ class MeanReversionStrategy(Strategy):
         reasons: list[str] = []
 
         if sig.rsi is not None and sig.rsi > RSI_OVERBOUGHT:
-            reasons.append(f"RSI={sig.rsi:.1f}>70")
+            reasons.append(f"RSI={sig.rsi:.1f}>65")
 
         if sig.price and sig.bb_upper and sig.price >= sig.bb_upper * 0.995:
             reasons.append("price>=upper_BB")
@@ -384,7 +384,7 @@ class MeanReversionStrategy(Strategy):
         )
 
     def _check_long_entry(self, symbol: str, sig: Signal) -> Decision | None:
-        """Score-based LONG entry. Score >= 0.50 generates a signal for AI review."""
+        """Score-based LONG entry. Score >= 0.60 generates a signal for AI review."""
         if sig.rsi is None or sig.price is None or sig.bb_lower is None:
             return None
 
@@ -475,7 +475,7 @@ class MeanReversionStrategy(Strategy):
         )
 
     def _check_short_entry(self, symbol: str, sig: Signal) -> Decision | None:
-        """Score-based SHORT entry. Score >= 0.50 generates a signal for AI review."""
+        """Score-based SHORT entry. Score >= 0.60 generates a signal for AI review."""
         if sig.rsi is None or sig.price is None or sig.bb_upper is None:
             return None
 

@@ -18,7 +18,7 @@ Entry scoring:
   - |funding| < max_funding_rate       -> +0.10
   - 1h trend alignment                 -> +0.10
   - No per-symbol cooldown             -> +0.10
-  Score >= 0.50 -> generate signal (confidence = score)
+  Score >= 0.60 -> generate signal (confidence = score)
 
 Hard blocks (always reject, bypass scoring):
   - |funding| >= 0.001 (extreme funding)
@@ -119,6 +119,8 @@ class BtcCorrelationStrategy(Strategy):
         self._db = db
         self._cycle_count: int = 0
         self._btc_change_1h: float | None = None  # cached per cycle
+        # Store BTC + alt prices at entry time for stable exit comparison
+        self._entry_prices: dict[str, dict[str, float]] = {}  # symbol -> {btc_price, alt_price, lag}
 
     def set_coins(self, coins: list[str]) -> None:
         self._coins = coins
@@ -146,6 +148,7 @@ class BtcCorrelationStrategy(Strategy):
     async def stop(self) -> None:
         self._signals.clear()
         self._btc_change_1h = None
+        self._entry_prices.clear()
         logger.info("BtcCorrelationStrategy stopped")
 
     # -- Update (called every tick) --
@@ -263,6 +266,12 @@ class BtcCorrelationStrategy(Strategy):
             # Check BUY first (BTC up, alt lagging)
             entry = self._check_long_entry(symbol, sig)
             if entry:
+                # Freeze BTC + alt prices at entry for stable exit
+                btc_price = self._md.get_mid_price("BTC")
+                if btc_price and sig.price and sig.lag is not None:
+                    self._entry_prices[symbol] = {
+                        "btc_price": btc_price, "alt_price": sig.price, "lag": sig.lag,
+                    }
                 decisions.append(entry)
                 await self._log_signal(entry, sig)
                 continue
@@ -270,6 +279,11 @@ class BtcCorrelationStrategy(Strategy):
             # Check SHORT (BTC down, alt hasn't dropped yet)
             entry = self._check_short_entry(symbol, sig)
             if entry:
+                btc_price = self._md.get_mid_price("BTC")
+                if btc_price and sig.price and sig.lag is not None:
+                    self._entry_prices[symbol] = {
+                        "btc_price": btc_price, "alt_price": sig.price, "lag": sig.lag,
+                    }
                 decisions.append(entry)
                 await self._log_signal(entry, sig)
 
@@ -432,13 +446,42 @@ class BtcCorrelationStrategy(Strategy):
         )
 
     def _check_long_exit(self, symbol: str, sig: BtcCorrSignal) -> Decision | None:
-        """Exit LONG when the correlation gap closes (alt caught up to BTC)."""
-        if sig.lag is None:
+        """Exit LONG when alt has caught up to BTC relative to entry prices.
+
+        Uses frozen entry prices to compute catch-up, not the rolling 1h lag
+        which shifts every hour boundary.
+        """
+        if sig.price is None:
             return None
 
-        if sig.lag >= self._btc_catch_up_pct:
-            return None  # still lagging, hold
+        entry = self._entry_prices.get(symbol)
+        if entry:
+            # Compute how much alt has moved since entry vs how much BTC has moved
+            btc_now = self._md.get_mid_price("BTC")
+            if btc_now and entry["btc_price"] > 0 and entry["alt_price"] > 0:
+                btc_chg = (btc_now - entry["btc_price"]) / entry["btc_price"] * 100
+                alt_chg = (sig.price - entry["alt_price"]) / entry["alt_price"] * 100
+                remaining_lag = btc_chg - alt_chg
+                if remaining_lag >= self._btc_catch_up_pct:
+                    return None  # still lagging, hold
+                self._entry_prices.pop(symbol, None)
+                return Decision(
+                    action="CLOSE",
+                    symbol=symbol,
+                    confidence=0.8,
+                    reasoning=(
+                        f"[BtcCorr LONG EXIT] {symbol}: entry_lag={entry['lag']:.2f}%, "
+                        f"remaining_lag={remaining_lag:.2f}% < {self._btc_catch_up_pct:.1f}% — alt caught up"
+                    ),
+                    strategy_type="btc_correlation",
+                    order_type="MARKET",
+                )
 
+        # Fallback: use rolling lag if no entry prices stored
+        if sig.lag is None:
+            return None
+        if sig.lag >= self._btc_catch_up_pct:
+            return None
         return Decision(
             action="CLOSE",
             symbol=symbol,
@@ -452,13 +495,37 @@ class BtcCorrelationStrategy(Strategy):
         )
 
     def _check_short_exit(self, symbol: str, sig: BtcCorrSignal) -> Decision | None:
-        """Exit SHORT when the correlation gap closes (alt caught down to BTC)."""
-        if sig.lag is None:
+        """Exit SHORT when alt has caught down to BTC relative to entry prices."""
+        if sig.price is None:
             return None
 
-        if sig.lag <= -self._btc_catch_up_pct:
-            return None  # still lagging downward, hold
+        entry = self._entry_prices.get(symbol)
+        if entry:
+            btc_now = self._md.get_mid_price("BTC")
+            if btc_now and entry["btc_price"] > 0 and entry["alt_price"] > 0:
+                btc_chg = (btc_now - entry["btc_price"]) / entry["btc_price"] * 100
+                alt_chg = (sig.price - entry["alt_price"]) / entry["alt_price"] * 100
+                remaining_lag = btc_chg - alt_chg
+                if remaining_lag <= -self._btc_catch_up_pct:
+                    return None  # still lagging downward, hold
+                self._entry_prices.pop(symbol, None)
+                return Decision(
+                    action="CLOSE",
+                    symbol=symbol,
+                    confidence=0.8,
+                    reasoning=(
+                        f"[BtcCorr SHORT EXIT] {symbol}: entry_lag={entry['lag']:.2f}%, "
+                        f"remaining_lag={remaining_lag:.2f}% > -{self._btc_catch_up_pct:.1f}% — alt caught down"
+                    ),
+                    strategy_type="btc_correlation",
+                    order_type="MARKET",
+                )
 
+        # Fallback: use rolling lag if no entry prices stored
+        if sig.lag is None:
+            return None
+        if sig.lag <= -self._btc_catch_up_pct:
+            return None
         return Decision(
             action="CLOSE",
             symbol=symbol,

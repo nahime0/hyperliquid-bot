@@ -11,7 +11,7 @@ SHORT Entry scoring:
   - Volume ratio >= 1.0             -> +0.10
   - |funding| < max_funding_rate    -> +0.10
   - No per-symbol cooldown          -> +0.10
-  Score >= 0.50 -> generate signal (confidence = score)
+  Score >= 0.60 -> generate signal (confidence = score)
 
 BUY Entry scoring (mirrored):
   - 4h price change > +3%           -> +0.30
@@ -26,9 +26,9 @@ Hard blocks (always reject, bypass scoring):
   - Global cooldown active (3+ consecutive losses)
   - Fresh per-symbol cooldown (loss < 10 min ago)
 
-Exit (trend reversal):
-  - SHORT exit: 1h trend turns BULLISH OR 4h trend turns BULLISH
-  - LONG exit: 1h trend turns BEARISH OR 4h trend turns BEARISH
+Exit (trend exhaustion — neither trend supports position):
+  - SHORT exit: 1h trend != BEARISH AND 4h trend != BEARISH
+  - LONG exit: 1h trend != BULLISH AND 4h trend != BULLISH
 """
 from __future__ import annotations
 
@@ -336,6 +336,11 @@ class TrendFollowingStrategy(Strategy):
 
         score = round(score, 2)
 
+        # Require at least one trend aligned (trend-following needs trend confirmation)
+        if not any(c.startswith("trend_") for c in components):
+            logger.debug("[TF SHORT] %s -> no trend alignment, skipping", symbol)
+            return None
+
         if score < SCORE_THRESHOLD:
             return None
 
@@ -407,6 +412,11 @@ class TrendFollowingStrategy(Strategy):
 
         score = round(score, 2)
 
+        # Require at least one trend aligned (trend-following needs trend confirmation)
+        if not any(c.startswith("trend_") for c in components):
+            logger.debug("[TF LONG] %s -> no trend alignment, skipping", symbol)
+            return None
+
         if score < SCORE_THRESHOLD:
             return None
 
@@ -429,43 +439,39 @@ class TrendFollowingStrategy(Strategy):
         )
 
     def _check_short_exit(self, symbol: str, sig: TrendSignal) -> Decision | None:
-        """Exit SHORT if trend reverses to BULLISH."""
-        reasons: list[str] = []
+        """Exit SHORT when neither trend supports the position anymore.
 
-        if sig.trend_1h == "BULLISH":
-            reasons.append("trend_1h=BULLISH")
-        if sig.trend_4h == "BULLISH":
-            reasons.append("trend_4h=BULLISH")
-
-        if not reasons:
-            return None
+        If neither 1h nor 4h trend is BEARISH, the downtrend has ended
+        (could be NEUTRAL or BULLISH). Waiting for full BULLISH reversal
+        on both timeframes traps positions through NEUTRAL phases.
+        """
+        if sig.trend_1h == "BEARISH" or sig.trend_4h == "BEARISH":
+            return None  # at least one trend still supports the SHORT
 
         return Decision(
             action="CLOSE",
             symbol=symbol,
             confidence=0.8,
-            reasoning=f"[TrendFollow SHORT EXIT] {symbol}: {', '.join(reasons)}",
+            reasoning=f"[TrendFollow SHORT EXIT] {symbol}: trend_1h={sig.trend_1h}, trend_4h={sig.trend_4h} (no bearish support)",
             strategy_type="trend_following",
             order_type="MARKET",
         )
 
     def _check_long_exit(self, symbol: str, sig: TrendSignal) -> Decision | None:
-        """Exit LONG if trend reverses to BEARISH."""
-        reasons: list[str] = []
+        """Exit LONG when neither trend supports the position anymore.
 
-        if sig.trend_1h == "BEARISH":
-            reasons.append("trend_1h=BEARISH")
-        if sig.trend_4h == "BEARISH":
-            reasons.append("trend_4h=BEARISH")
-
-        if not reasons:
-            return None
+        If neither 1h nor 4h trend is BULLISH, the uptrend has ended
+        (could be NEUTRAL or BEARISH). Waiting for full BEARISH reversal
+        on both timeframes traps positions through NEUTRAL phases.
+        """
+        if sig.trend_1h == "BULLISH" or sig.trend_4h == "BULLISH":
+            return None  # at least one trend still supports the LONG
 
         return Decision(
             action="CLOSE",
             symbol=symbol,
             confidence=0.8,
-            reasoning=f"[TrendFollow LONG EXIT] {symbol}: {', '.join(reasons)}",
+            reasoning=f"[TrendFollow LONG EXIT] {symbol}: trend_1h={sig.trend_1h}, trend_4h={sig.trend_4h} (no bullish support)",
             strategy_type="trend_following",
             order_type="MARKET",
         )

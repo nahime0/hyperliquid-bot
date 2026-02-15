@@ -120,8 +120,8 @@ class StrategyConfig:
     tf_allow_short: bool = False       # disable SHORT on trend_following (0% WR)
     tf_change_threshold: float = 4.0  # % price change over 4h to fire trend signal
     rsi_div_swing_window: int = 5       # wider window to catch more divergences (was 4)
-    rsi_div_long_exit: float = 55.0     # optimized: le=55 in 50% of top 30
-    rsi_div_short_exit: float = 35.0    # optimized: se=35 in 73% of top 30
+    rsi_div_long_exit: float = 65.0     # widened from 55 to avoid premature exit (5m RSI volatile)
+    rsi_div_short_exit: float = 25.0    # widened from 35 to avoid premature exit (5m RSI volatile)
     min_candle_volume_usdc: float = 10_000.0  # skip coins with candle volume below this
     primary_interval: str = "5m"      # RSI Div uses 5m
     mr_interval: str = "15m"          # Mean Reversion uses 15m
@@ -133,7 +133,7 @@ class StrategyConfig:
     # EMA Crossover
     ema_cross_fast: int = 9             # fast EMA period
     ema_cross_slow: int = 21            # slow EMA period
-    ema_cross_max_bars: int = 5         # max bars since crossover
+    ema_cross_max_bars: int = 2         # max bars since crossover
     # BB Squeeze
     bbs_squeeze_percentile: float = 20.0  # bandwidth percentile for squeeze
     bbs_lookback_bars: int = 100          # bars to compute bandwidth percentile
@@ -273,8 +273,8 @@ def load_settings() -> Settings:
             ),
             rsi_div_period=int(os.getenv("RSI_DIV_PERIOD", "14")),
             rsi_div_swing_window=int(os.getenv("RSI_DIV_SWING_WINDOW", "5")),
-            rsi_div_long_exit=float(os.getenv("RSI_DIV_LONG_EXIT", "55.0")),
-            rsi_div_short_exit=float(os.getenv("RSI_DIV_SHORT_EXIT", "35.0")),
+            rsi_div_long_exit=float(os.getenv("RSI_DIV_LONG_EXIT", "65.0")),
+            rsi_div_short_exit=float(os.getenv("RSI_DIV_SHORT_EXIT", "25.0")),
             min_candle_volume_usdc=float(os.getenv("MIN_CANDLE_VOLUME_USDC", "10000")),
             primary_interval=os.getenv("PRIMARY_INTERVAL", "5m"),
             mr_interval=os.getenv("MR_INTERVAL", "15m"),
@@ -288,7 +288,7 @@ def load_settings() -> Settings:
             # EMA Crossover
             ema_cross_fast=int(os.getenv("EMA_CROSS_FAST", "9")),
             ema_cross_slow=int(os.getenv("EMA_CROSS_SLOW", "21")),
-            ema_cross_max_bars=int(os.getenv("EMA_CROSS_MAX_BARS", "5")),
+            ema_cross_max_bars=int(os.getenv("EMA_CROSS_MAX_BARS", "2")),
             # BB Squeeze
             bbs_squeeze_percentile=float(os.getenv("BBS_SQUEEZE_PERCENTILE", "20.0")),
             bbs_lookback_bars=int(os.getenv("BBS_LOOKBACK_BARS", "100")),

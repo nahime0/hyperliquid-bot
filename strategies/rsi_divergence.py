@@ -345,7 +345,14 @@ class RSIDivergenceStrategy(Strategy):
         """Check if a LONG entry via bullish divergence is warranted."""
         diag = f"div={sig.divergence}, trend={sig.trend}, RSI={f'{sig.rsi:.1f}' if sig.rsi else 'N/A'}, conf={sig.confidence:.2f}"
 
-        # Trend filter removed — AI does fine filtering on trend
+        # RSI guard: reject if RSI already near exit threshold (would exit immediately)
+        if sig.rsi is not None and sig.rsi >= self._rsi_long_exit:
+            logger.debug("[RD LONG] %s: %s → SKIP: RSI=%.1f already >= exit threshold %.0f", symbol, diag, sig.rsi, self._rsi_long_exit)
+            return None
+
+        # RSI zone gate: only enter LONG when RSI is below neutral
+        if sig.rsi is not None and sig.rsi > 45:
+            return None
 
         if not self._funding_ok(symbol):
             logger.debug("[RD LONG] %s: %s → SKIP: high funding rate", symbol, diag)
@@ -372,7 +379,14 @@ class RSIDivergenceStrategy(Strategy):
         """Check if a SHORT entry via bearish divergence is warranted."""
         diag = f"div={sig.divergence}, trend={sig.trend}, RSI={f'{sig.rsi:.1f}' if sig.rsi else 'N/A'}, conf={sig.confidence:.2f}"
 
-        # Trend filter removed — AI does fine filtering on trend
+        # RSI guard: reject if RSI already near exit threshold (would exit immediately)
+        if sig.rsi is not None and sig.rsi <= self._rsi_short_exit:
+            logger.debug("[RD SHORT] %s: %s → SKIP: RSI=%.1f already <= exit threshold %.0f", symbol, diag, sig.rsi, self._rsi_short_exit)
+            return None
+
+        # RSI zone gate: only enter SHORT when RSI is above neutral
+        if sig.rsi is not None and sig.rsi < 55:
+            return None
 
         if not self._funding_ok(symbol):
             logger.debug("[RD SHORT] %s: %s → SKIP: high funding rate", symbol, diag)

@@ -10,7 +10,7 @@ LONG Entry scoring:
   - Volume spike >= 1.5x 20-bar SMA      -> +0.15
   - |funding| < max_funding_rate          -> +0.10
   - No per-symbol cooldown               -> +0.10
-  Score >= 0.50 -> generate signal (confidence = score)
+  Score >= 0.60 -> generate signal (confidence = score)
 
 Hard blocks (always reject, bypass scoring):
   - |funding| >= 0.001 (extreme funding)
@@ -160,6 +160,10 @@ class BuyTheDipStrategy(Strategy):
             if price_3_ago <= 0:
                 return
             dip_pct = (price - price_3_ago) / price_3_ago * 100
+
+            # Recovery confirmation: current close must be above previous close (bounce started)
+            if float(close_5m.iloc[-1]) <= float(close_5m.iloc[-2]):
+                return  # Still falling, no recovery yet
 
             # Pre-dip high: high of the candle 3 bars ago
             pre_dip_high = float(high_5m.iloc[-4])
@@ -361,7 +365,7 @@ class BuyTheDipStrategy(Strategy):
         rsi_str = f"{sig.rsi_5m:.1f}" if sig.rsi_5m is not None else "N/A"
 
         logger.debug("[BTD LONG] %s: score=%.3f -- %s", symbol, score, ", ".join(components))
-        expected_move = abs(sig.dip_pct)
+        expected_move = (sig.pre_dip_high - sig.price) / sig.price * 100 if sig.pre_dip_high and sig.price and sig.price > 0 else abs(sig.dip_pct)
         return Decision(
             action="BUY",
             symbol=symbol,

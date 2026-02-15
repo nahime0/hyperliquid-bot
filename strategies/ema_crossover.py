@@ -10,13 +10,13 @@ LONG Entry scoring:
   - RSI < 60 (confirmation)             -> +0.15
   - |funding| < max_funding_rate        -> +0.10
   - No per-symbol cooldown              -> +0.10
-  Score >= 0.50 -> generate signal (confidence = score)
+  Score >= 0.60 -> generate signal (confidence = score)
 
 SHORT Entry scoring (mirrored):
   - Death cross strength (normalized)   -> +0.30
   - 1h trend BEARISH (TrendFilter)      -> +0.20
   - Volume ratio >= 1.0                 -> +0.15
-  - RSI > 40 (confirmation)             -> +0.15
+  - RSI > 50 (confirmation)             -> +0.15
   - |funding| < max_funding_rate        -> +0.10
   - No per-symbol cooldown              -> +0.10
 
@@ -112,6 +112,9 @@ class EmaCrossoverStrategy(Strategy):
         self._max_funding_rate: float = 0.0005
         self._db = db
         self._cycle_count: int = 0
+        # Track EMA relationship per symbol for crossing detection
+        # True = EMA fast > EMA slow (golden state)
+        self._prev_ema_above: dict[str, bool] = {}
 
     # -- Setters --
 
@@ -142,6 +145,7 @@ class EmaCrossoverStrategy(Strategy):
 
     async def stop(self) -> None:
         self._signals.clear()
+        self._prev_ema_above.clear()
         logger.info("EmaCrossoverStrategy stopped")
 
     # -- Update (called every tick) --
@@ -311,8 +315,8 @@ class EmaCrossoverStrategy(Strategy):
         score = 0.0
         components: list[str] = []
 
-        # Cross strength (graduated)
-        score += W_CROSS * sig.cross_strength
+        # Flat score for detecting a fresh cross; cross_strength is a minor bonus
+        score += W_CROSS * max(0.5, sig.cross_strength)
         components.append(f"cross={sig.cross_strength:.3f}")
 
         # 1h trend alignment
@@ -356,7 +360,8 @@ class EmaCrossoverStrategy(Strategy):
         rsi_str = f"{sig.rsi:.1f}" if sig.rsi is not None else "N/A"
 
         logger.debug("[EMA LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
-        expected_move = abs(sig.ema_fast - sig.ema_slow) / sig.price * 100
+        # EMA gap at cross is near-zero; use cross_strength or fixed proxy
+        expected_move = max(0.5, abs(sig.ema_fast - sig.ema_slow) / sig.price * 100)
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -396,8 +401,8 @@ class EmaCrossoverStrategy(Strategy):
         score = 0.0
         components: list[str] = []
 
-        # Cross strength (graduated)
-        score += W_CROSS * sig.cross_strength
+        # Flat score for detecting a fresh cross; cross_strength is a minor bonus
+        score += W_CROSS * max(0.5, sig.cross_strength)
         components.append(f"cross={sig.cross_strength:.3f}")
 
         # 1h trend alignment
@@ -410,10 +415,10 @@ class EmaCrossoverStrategy(Strategy):
             score += W_VOLUME
             components.append(f"vol={sig.volume_ratio:.1f}")
 
-        # RSI confirmation: for SHORT, RSI > 40 confirms
-        if sig.rsi is not None and sig.rsi > 40:
+        # RSI confirmation: for SHORT, RSI > 50 confirms
+        if sig.rsi is not None and sig.rsi > 50:
             score += W_RSI
-            components.append(f"RSI={sig.rsi:.1f}>40")
+            components.append(f"RSI={sig.rsi:.1f}>50")
 
         # Funding
         if abs_funding < self._max_funding_rate:
@@ -441,7 +446,8 @@ class EmaCrossoverStrategy(Strategy):
         rsi_str = f"{sig.rsi:.1f}" if sig.rsi is not None else "N/A"
 
         logger.debug("[EMA SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
-        expected_move = abs(sig.ema_fast - sig.ema_slow) / sig.price * 100
+        # EMA gap at cross is near-zero; use cross_strength or fixed proxy
+        expected_move = max(0.5, abs(sig.ema_fast - sig.ema_slow) / sig.price * 100)
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -457,13 +463,40 @@ class EmaCrossoverStrategy(Strategy):
         )
 
     def _check_long_exit(self, symbol: str, sig: EmaCrossSignal) -> Decision | None:
-        """Exit LONG if EMA9 crosses back below EMA21 (death cross)."""
-        if sig.ema_fast is None or sig.ema_slow is None:
+        """Exit LONG if EMA9 actually crosses below EMA21 (death cross transition).
+
+        Just checking ema_fast < ema_slow is not enough — after a golden cross,
+        EMAs are very close and single candle noise causes re-cross. Instead:
+        1. Track previous EMA state per symbol
+        2. Only exit on actual state transition (was above, now below)
+        3. Require a minimum gap (hysteresis) of 0.05% to filter noise
+        """
+        if sig.ema_fast is None or sig.ema_slow is None or sig.price is None:
             return None
 
-        if sig.ema_fast >= sig.ema_slow:
+        currently_above = sig.ema_fast > sig.ema_slow
+        was_above = self._prev_ema_above.get(symbol)
+
+        # Update state
+        self._prev_ema_above[symbol] = currently_above
+
+        if currently_above:
             return None  # still golden — hold
 
+        # EMA fast is below slow — but is this a real cross or noise?
+        if was_above is None:
+            return None  # first check — no previous state to compare
+
+        if was_above is False:
+            return None  # was already below — not a new crossing event
+
+        # was_above is True, now below — actual crossing detected
+        # Hysteresis: require gap > 0.05% of price to confirm
+        gap_pct = abs(sig.ema_slow - sig.ema_fast) / sig.price * 100 if sig.price > 0 else 0
+        if gap_pct < 0.05:
+            return None  # EMAs too close, noise — wait for confirmation
+
+        self._prev_ema_above.pop(symbol, None)  # clean up on exit
         return Decision(
             action="CLOSE",
             symbol=symbol,
@@ -471,20 +504,38 @@ class EmaCrossoverStrategy(Strategy):
             reasoning=(
                 f"[EmaCross LONG EXIT] {symbol}: death_cross "
                 f"EMA{self._ema_fast_period}={sig.ema_fast:.6f} < "
-                f"EMA{self._ema_slow_period}={sig.ema_slow:.6f}"
+                f"EMA{self._ema_slow_period}={sig.ema_slow:.6f} (gap={gap_pct:.3f}%)"
             ),
             strategy_type="ema_crossover",
             order_type="MARKET",
         )
 
     def _check_short_exit(self, symbol: str, sig: EmaCrossSignal) -> Decision | None:
-        """Exit SHORT if EMA9 crosses back above EMA21 (golden cross)."""
-        if sig.ema_fast is None or sig.ema_slow is None:
+        """Exit SHORT if EMA9 actually crosses above EMA21 (golden cross transition)."""
+        if sig.ema_fast is None or sig.ema_slow is None or sig.price is None:
             return None
 
-        if sig.ema_fast <= sig.ema_slow:
+        currently_above = sig.ema_fast > sig.ema_slow
+        was_above = self._prev_ema_above.get(symbol)
+
+        # Update state
+        self._prev_ema_above[symbol] = currently_above
+
+        if not currently_above:
             return None  # still death — hold
 
+        if was_above is None:
+            return None  # first check — no previous state
+
+        if was_above is True:
+            return None  # was already above — not a new crossing event
+
+        # was_above is False, now True — actual crossing detected
+        gap_pct = abs(sig.ema_fast - sig.ema_slow) / sig.price * 100 if sig.price > 0 else 0
+        if gap_pct < 0.05:
+            return None  # noise — wait for confirmation
+
+        self._prev_ema_above.pop(symbol, None)  # clean up on exit
         return Decision(
             action="CLOSE",
             symbol=symbol,
@@ -492,7 +543,7 @@ class EmaCrossoverStrategy(Strategy):
             reasoning=(
                 f"[EmaCross SHORT EXIT] {symbol}: golden_cross "
                 f"EMA{self._ema_fast_period}={sig.ema_fast:.6f} > "
-                f"EMA{self._ema_slow_period}={sig.ema_slow:.6f}"
+                f"EMA{self._ema_slow_period}={sig.ema_slow:.6f} (gap={gap_pct:.3f}%)"
             ),
             strategy_type="ema_crossover",
             order_type="MARKET",
@@ -520,7 +571,7 @@ class EmaCrossoverStrategy(Strategy):
                     "volume_ratio": sig.volume_ratio,
                     "ema_fast": sig.ema_fast,
                     "ema_slow": sig.ema_slow,
-                    "expected_move_pct": round(abs(sig.ema_fast - sig.ema_slow) / sig.price * 100, 2) if sig.ema_fast and sig.ema_slow and sig.price else None,
+                    "expected_move_pct": round(max(0.5, abs(sig.ema_fast - sig.ema_slow) / sig.price * 100), 2) if sig.ema_fast and sig.ema_slow and sig.price else None,
                 },
             )
         except Exception:

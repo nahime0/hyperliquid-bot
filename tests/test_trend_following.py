@@ -92,15 +92,14 @@ class TestShortEntryScoring:
         assert d is not None
         assert d.confidence == 0.80
 
-    def test_change_only_with_minors(self):
-        """Only change_4h met + minors -> score=0.60."""
+    def test_change_only_no_trend_blocked(self):
+        """change_4h met + minors but NO trend alignment -> blocked."""
         s = _make_strategy()
         sig = _make_signal(change_4h=-4.0, trend_1h="NEUTRAL", trend_4h="NEUTRAL",
                            volume_ratio=1.5)
-        # chg(0.30) + t1h(0) + t4h(0) + vol(0.10) + fund(0.10) + cd(0.10) = 0.60
+        # Trend-following requires at least one trend aligned
         d = s._check_short_entry("ETH", sig)
-        assert d is not None
-        assert d.confidence == 0.60
+        assert d is None
 
     def test_trends_only_no_change(self):
         """Both trends BEARISH but change < threshold -> score=0.60."""
@@ -260,48 +259,75 @@ class TestHardBlocks:
 
 
 class TestExits:
-    def test_short_exit_on_trend_1h_bullish(self):
+    def test_short_exit_both_non_bearish(self):
+        """Exit SHORT when neither trend is BEARISH (trend exhaustion)."""
+        s = _make_strategy()
+        sig = _make_signal(trend_1h="BULLISH", trend_4h="BULLISH")
+        d = s._check_short_exit("ETH", sig)
+        assert d is not None
+        assert d.action == "CLOSE"
+
+    def test_short_exit_neutral_neutral(self):
+        """Exit SHORT when both trends are NEUTRAL (no bearish support)."""
+        s = _make_strategy()
+        sig = _make_signal(trend_1h="NEUTRAL", trend_4h="NEUTRAL")
+        d = s._check_short_exit("ETH", sig)
+        assert d is not None
+        assert d.action == "CLOSE"
+
+    def test_short_exit_bullish_neutral(self):
+        """Exit SHORT when trend_1h=BULLISH, trend_4h=NEUTRAL (no bearish support)."""
         s = _make_strategy()
         sig = _make_signal(trend_1h="BULLISH", trend_4h="NEUTRAL")
         d = s._check_short_exit("ETH", sig)
         assert d is not None
         assert d.action == "CLOSE"
-        assert "trend_1h=BULLISH" in d.reasoning
 
-    def test_short_exit_on_trend_4h_bullish(self):
+    def test_short_no_exit_if_one_bearish(self):
+        """Do NOT exit SHORT if at least one trend still supports it."""
         s = _make_strategy()
-        sig = _make_signal(trend_1h="NEUTRAL", trend_4h="BULLISH")
+        sig = _make_signal(trend_1h="BEARISH", trend_4h="NEUTRAL")
         d = s._check_short_exit("ETH", sig)
-        assert d is not None
-        assert d.action == "CLOSE"
+        assert d is None
 
-    def test_short_no_exit_if_still_bearish(self):
+    def test_short_no_exit_if_both_bearish(self):
         s = _make_strategy()
         sig = _make_signal(trend_1h="BEARISH", trend_4h="BEARISH")
         d = s._check_short_exit("ETH", sig)
         assert d is None
 
-    def test_short_no_exit_if_neutral(self):
+    def test_long_exit_both_non_bullish(self):
+        """Exit LONG when neither trend is BULLISH (trend exhaustion)."""
+        s = _make_strategy()
+        sig = _make_signal(trend_1h="BEARISH", trend_4h="BEARISH")
+        d = s._check_long_exit("ETH", sig)
+        assert d is not None
+        assert d.action == "CLOSE"
+
+    def test_long_exit_neutral_neutral(self):
+        """Exit LONG when both trends are NEUTRAL (no bullish support)."""
         s = _make_strategy()
         sig = _make_signal(trend_1h="NEUTRAL", trend_4h="NEUTRAL")
-        d = s._check_short_exit("ETH", sig)
-        assert d is None
+        d = s._check_long_exit("ETH", sig)
+        assert d is not None
+        assert d.action == "CLOSE"
 
-    def test_long_exit_on_trend_1h_bearish(self):
+    def test_long_exit_bearish_neutral(self):
+        """Exit LONG when trend_1h=BEARISH, trend_4h=NEUTRAL (no bullish support)."""
         s = _make_strategy()
         sig = _make_signal(trend_1h="BEARISH", trend_4h="NEUTRAL")
         d = s._check_long_exit("ETH", sig)
         assert d is not None
         assert d.action == "CLOSE"
-        assert "trend_1h=BEARISH" in d.reasoning
 
-    def test_long_exit_on_trend_4h_bearish(self):
+    def test_long_no_exit_if_one_bullish(self):
+        """Do NOT exit LONG if at least one trend still supports it."""
         s = _make_strategy()
-        sig = _make_signal(trend_1h="NEUTRAL", trend_4h="BEARISH")
+        sig = _make_signal(trend_1h="BULLISH", trend_4h="NEUTRAL")
         d = s._check_long_exit("ETH", sig)
-        assert d is not None
+        assert d is None
 
-    def test_long_no_exit_if_still_bullish(self):
+    def test_long_no_exit_if_both_bullish(self):
         s = _make_strategy()
         sig = _make_signal(trend_1h="BULLISH", trend_4h="BULLISH")
         d = s._check_long_exit("ETH", sig)

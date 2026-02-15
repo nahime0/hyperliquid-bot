@@ -11,7 +11,7 @@ LONG Entry scoring:
   - 1h trend not BEARISH             -> +0.10
   - |funding| < max_funding_rate     -> +0.10
   - No per-symbol cooldown           -> +0.10
-  Score >= 0.50 -> generate signal (confidence = score)
+  Score >= 0.60 -> generate signal (confidence = score)
 
 SHORT Entry scoring (mirrored):
   - Volume spike >= 3x 20-bar avg   -> +0.30  (graduated by magnitude)
@@ -67,7 +67,7 @@ RSI_PERIOD = 14
 BB_PERIOD = 20
 BB_STD = 2.0
 VOLUME_SMA_PERIOD = 20
-MIN_CANDLES = 25          # need >= 25 candles for BB(20) + volume SMA(20)
+MIN_CANDLES = 26          # need >= 26 candles for BB(20) + volume SMA(20) excl. spike bar
 
 # -- Exit thresholds --
 RSI_EXIT_LONG = 70.0      # LONG exit when RSI > 70
@@ -181,7 +181,7 @@ class VolumeSpikeStrategy(Strategy):
                     return
 
             # Volume spike ratio
-            vol_sma = float(volume.rolling(VOLUME_SMA_PERIOD).mean().iloc[-1])
+            vol_sma = float(volume.rolling(VOLUME_SMA_PERIOD).mean().iloc[-2])
             spike_ratio = float(volume.iloc[-1]) / vol_sma if vol_sma > 0 else None
 
             # Candle pattern detection on last candle
@@ -329,6 +329,10 @@ class VolumeSpikeStrategy(Strategy):
         if sig.spike_ratio < self._spike_threshold:
             return None
 
+        # RSI guard: don't enter LONG if RSI already near exit threshold
+        if sig.rsi is not None and sig.rsi > 55.0:
+            return None
+
         # Hard blocks
         blocked, can_buy, abs_funding = check_hard_blocks(
             symbol,
@@ -338,6 +342,10 @@ class VolumeSpikeStrategy(Strategy):
         )
         if blocked:
             logger.debug("[VS LONG] %s -> HARD BLOCK", symbol)
+            return None
+
+        # Hard requirement: must have a hammer reversal candle
+        if sig.candle_pattern != "HAMMER":
             return None
 
         # Scoring
@@ -386,7 +394,7 @@ class VolumeSpikeStrategy(Strategy):
             return None
 
         logger.debug("[VS LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
-        expected_move = sig.pattern_strength * 2.0 if sig.pattern_strength is not None else 0.0
+        expected_move = sig.pattern_strength * 2.0 if sig.pattern_strength is not None else 0.5
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -411,6 +419,10 @@ class VolumeSpikeStrategy(Strategy):
         if sig.spike_ratio < self._spike_threshold:
             return None
 
+        # RSI guard: don't enter SHORT if RSI already near exit threshold
+        if sig.rsi is not None and sig.rsi < 45.0:
+            return None
+
         # Hard blocks
         blocked, can_buy, abs_funding = check_hard_blocks(
             symbol,
@@ -420,6 +432,10 @@ class VolumeSpikeStrategy(Strategy):
         )
         if blocked:
             logger.debug("[VS SHORT] %s -> HARD BLOCK", symbol)
+            return None
+
+        # Hard requirement: must have an inverted hammer reversal candle
+        if sig.candle_pattern != "INV_HAMMER":
             return None
 
         # Scoring
@@ -468,7 +484,7 @@ class VolumeSpikeStrategy(Strategy):
             return None
 
         logger.debug("[VS SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
-        expected_move = sig.pattern_strength * 2.0 if sig.pattern_strength is not None else 0.0
+        expected_move = sig.pattern_strength * 2.0 if sig.pattern_strength is not None else 0.5
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -485,30 +501,59 @@ class VolumeSpikeStrategy(Strategy):
         )
 
     def _check_long_exit(self, symbol: str, sig: VolumeSignal) -> Decision | None:
-        """Exit LONG when RSI > 70 (volume normalized + overbought)."""
+        """Exit LONG when RSI > 70 OR price crossed above BB midline (profit taking).
+
+        RSI on 5m is very volatile; BB midline gives a price-based profit target
+        since volume spike entries happen near the lower band.
+        Require BOTH RSI > 60 AND %B > 0.5 for the BB-based exit to reduce noise.
+        """
+        reasons: list[str] = []
+
+        # Primary: RSI overbought
         if sig.rsi is not None and sig.rsi > RSI_EXIT_LONG:
-            return Decision(
-                action="CLOSE",
-                symbol=symbol,
-                confidence=0.8,
-                reasoning=f"[VolSpike LONG EXIT] {symbol}: RSI={sig.rsi:.1f}>{RSI_EXIT_LONG:.0f}",
-                strategy_type="volume_spike",
-                order_type="MARKET",
-            )
-        return None
+            reasons.append(f"RSI={sig.rsi:.1f}>{RSI_EXIT_LONG:.0f}")
+
+        # Secondary: price above BB midline with RSI confirmation
+        if not reasons and sig.bb_pct is not None and sig.rsi is not None:
+            if sig.bb_pct > 0.5 and sig.rsi > 60:
+                reasons.append(f"bb_pct={sig.bb_pct:.2f}>0.5+RSI={sig.rsi:.1f}>60")
+
+        if not reasons:
+            return None
+
+        return Decision(
+            action="CLOSE",
+            symbol=symbol,
+            confidence=0.8,
+            reasoning=f"[VolSpike LONG EXIT] {symbol}: {', '.join(reasons)}",
+            strategy_type="volume_spike",
+            order_type="MARKET",
+        )
 
     def _check_short_exit(self, symbol: str, sig: VolumeSignal) -> Decision | None:
-        """Exit SHORT when RSI < 30 (volume normalized + oversold)."""
+        """Exit SHORT when RSI < 30 OR price crossed below BB midline."""
+        reasons: list[str] = []
+
+        # Primary: RSI oversold
         if sig.rsi is not None and sig.rsi < RSI_EXIT_SHORT:
-            return Decision(
-                action="CLOSE",
-                symbol=symbol,
-                confidence=0.8,
-                reasoning=f"[VolSpike SHORT EXIT] {symbol}: RSI={sig.rsi:.1f}<{RSI_EXIT_SHORT:.0f}",
-                strategy_type="volume_spike",
-                order_type="MARKET",
-            )
-        return None
+            reasons.append(f"RSI={sig.rsi:.1f}<{RSI_EXIT_SHORT:.0f}")
+
+        # Secondary: price below BB midline with RSI confirmation
+        if not reasons and sig.bb_pct is not None and sig.rsi is not None:
+            if sig.bb_pct < 0.5 and sig.rsi < 40:
+                reasons.append(f"bb_pct={sig.bb_pct:.2f}<0.5+RSI={sig.rsi:.1f}<40")
+
+        if not reasons:
+            return None
+
+        return Decision(
+            action="CLOSE",
+            symbol=symbol,
+            confidence=0.8,
+            reasoning=f"[VolSpike SHORT EXIT] {symbol}: {', '.join(reasons)}",
+            strategy_type="volume_spike",
+            order_type="MARKET",
+        )
 
     async def _log_signal(self, decision: Decision, sig: VolumeSignal) -> None:
         if not self._db or self._cycle_count <= 0:
