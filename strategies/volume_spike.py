@@ -48,6 +48,7 @@ from risk.position_tracker import PositionTracker
 from strategies.base import Strategy
 from strategies.cooldown import CooldownTracker
 from strategies.hard_blocks import check_hard_blocks
+from strategies.structure_filter import check_structure_confirmation
 from strategies.trend_filter import TrendFilter
 from utils.logger import get_logger
 
@@ -393,6 +394,13 @@ class VolumeSpikeStrategy(Strategy):
             )
             return None
 
+        # ── Structure confirmation on 5m candles ─────────────────
+        df_5m = self._md.get_candles(symbol, "5m")
+        confirmed, sc_reason = check_structure_confirmation(df_5m, "LONG")
+        if not confirmed:
+            logger.debug("[VS LONG] %s -> no structure confirmation (%s), skipping", symbol, sc_reason)
+            return None
+
         logger.debug("[VS LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
         expected_move = sig.pattern_strength * 2.0 if sig.pattern_strength is not None else 0.5
         return Decision(
@@ -481,6 +489,13 @@ class VolumeSpikeStrategy(Strategy):
                 sig.candle_pattern or "none",
                 f"{sig.bb_pct:.2f}" if sig.bb_pct is not None else "N/A",
             )
+            return None
+
+        # ── Structure confirmation on 5m candles ─────────────────
+        df_5m = self._md.get_candles(symbol, "5m")
+        confirmed, sc_reason = check_structure_confirmation(df_5m, "SHORT")
+        if not confirmed:
+            logger.debug("[VS SHORT] %s -> no structure confirmation (%s), skipping", symbol, sc_reason)
             return None
 
         logger.debug("[VS SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
