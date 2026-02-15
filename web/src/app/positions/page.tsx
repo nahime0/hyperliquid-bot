@@ -19,63 +19,131 @@ function slColor(direction: string, entryPrice: number, price: number | null): s
   return price <= entryPrice ? "text-profit" : "text-loss";
 }
 
-function PositionDetail({ position: p }: { position: Position }) {
+/** Compute PnL for a hypothetical exit price given entry, quantity, and direction. */
+function computePnl(direction: string, entryPrice: number, exitPrice: number, quantity: number): number {
+  return direction === "LONG"
+    ? (exitPrice - entryPrice) * quantity
+    : (entryPrice - exitPrice) * quantity;
+}
+
+/** A single row in the exit scenarios table. */
+function ExitRow({ label, price, pnl, active }: { label: string; price: number; pnl: number; active?: boolean }) {
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-bg-secondary rounded-lg border border-border-light text-xs">
-      <div>
-        <span className="text-text-muted block mb-0.5">Entry Price</span>
-        <span className="font-mono font-medium text-text-primary">{formatPrice(p.entry_price)}</span>
+    <div className={`flex items-center justify-between py-1.5 px-3 rounded ${active ? "bg-accent/5" : ""}`}>
+      <span className="text-text-muted">
+        {label}
+        {active && <span className="ml-1.5 text-[10px] text-accent font-medium uppercase">active</span>}
+      </span>
+      <div className="flex items-center gap-4">
+        <span className="font-mono text-text-primary">{formatPrice(price)}</span>
+        <span className="text-right w-20 font-mono" style={{ minWidth: "5rem" }}>
+          <span className={pnl >= 0 ? "text-profit" : "text-loss"}>{formatUsd(pnl)}</span>
+        </span>
       </div>
-      <div>
-        <span className="text-text-muted block mb-0.5">Quantity</span>
-        <span className="font-mono font-medium text-text-primary">{p.quantity.toFixed(6)}</span>
-      </div>
-      <div>
-        <span className="text-text-muted block mb-0.5">Stop Loss</span>
-        <span className={`font-mono font-medium ${slColor(p.direction, p.entry_price, p.stop_loss)}`}>{p.stop_loss ? formatPrice(p.stop_loss) : "—"}</span>
-        {p.original_sl && p.original_sl !== p.stop_loss && (
-          <span className="text-text-muted block">orig: {formatPrice(p.original_sl)}</span>
+    </div>
+  );
+}
+
+function PositionDetail({ position: p }: { position: Position }) {
+  const entryValue = p.entry_price * p.quantity;
+  const hasTrailing = p.trailing_sl != null;
+  const hasSl = p.stop_loss != null;
+  const hasTp = p.take_profit != null;
+  const hasAnyScenario = hasTrailing || hasSl || hasTp;
+
+  return (
+    <div className="space-y-3">
+      {/* Existing detail grid */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-bg-secondary rounded-lg border border-border-light text-xs">
+        <div>
+          <span className="text-text-muted block mb-0.5">Entry Price</span>
+          <span className="font-mono font-medium text-text-primary">{formatPrice(p.entry_price)}</span>
+        </div>
+        <div>
+          <span className="text-text-muted block mb-0.5">Quantity</span>
+          <span className="font-mono font-medium text-text-primary">{p.quantity.toFixed(6)}</span>
+        </div>
+        <div>
+          <span className="text-text-muted block mb-0.5">Stop Loss</span>
+          <span className={`font-mono font-medium ${slColor(p.direction, p.entry_price, p.stop_loss)}`}>{p.stop_loss ? formatPrice(p.stop_loss) : "—"}</span>
+          {p.original_sl && p.original_sl !== p.stop_loss && (
+            <span className="text-text-muted block">orig: {formatPrice(p.original_sl)}</span>
+          )}
+        </div>
+        <div>
+          <span className="text-text-muted block mb-0.5">Take Profit</span>
+          <span className="font-mono font-medium text-text-primary">{p.take_profit ? formatPrice(p.take_profit) : "—"}</span>
+        </div>
+        <div>
+          <span className="text-text-muted block mb-0.5">Trailing SL</span>
+          <span className={`font-mono font-medium ${slColor(p.direction, p.entry_price, p.trailing_sl)}`}>{p.trailing_sl ? formatPrice(p.trailing_sl) : "—"}</span>
+        </div>
+        <div>
+          <span className="text-text-muted block mb-0.5">Liquidation</span>
+          <span className="font-mono font-medium text-loss">{p.liquidation_price ? formatPrice(p.liquidation_price) : "—"}</span>
+        </div>
+        <div>
+          <span className="text-text-muted block mb-0.5">Funding Paid</span>
+          <span className={`font-mono font-medium ${p.funding_paid < 0 ? "text-loss" : p.funding_paid > 0 ? "text-profit" : "text-text-muted"}`}>
+            {p.funding_paid !== 0 ? formatUsd(p.funding_paid) : "—"}
+          </span>
+        </div>
+        <div>
+          <span className="text-text-muted block mb-0.5">
+            {p.direction === "LONG" ? "Max Price" : "Min Price"}
+          </span>
+          <span className="font-mono font-medium text-text-primary">
+            {p.direction === "LONG"
+              ? p.max_price_seen ? formatPrice(p.max_price_seen) : "—"
+              : p.min_price_seen ? formatPrice(p.min_price_seen) : "—"
+            }
+          </span>
+        </div>
+        {p.exit_price && (
+          <div>
+            <span className="text-text-muted block mb-0.5">Exit Price</span>
+            <span className="font-mono font-medium text-text-primary">{formatPrice(p.exit_price)}</span>
+          </div>
+        )}
+        {p.close_reason && (
+          <div>
+            <span className="text-text-muted block mb-0.5">Close Reason</span>
+            <span className="font-medium text-text-secondary">{p.close_reason}</span>
+          </div>
         )}
       </div>
-      <div>
-        <span className="text-text-muted block mb-0.5">Take Profit</span>
-        <span className="font-mono font-medium text-text-primary">{p.take_profit ? formatPrice(p.take_profit) : "—"}</span>
-      </div>
-      <div>
-        <span className="text-text-muted block mb-0.5">Trailing SL</span>
-        <span className={`font-mono font-medium ${slColor(p.direction, p.entry_price, p.trailing_sl)}`}>{p.trailing_sl ? formatPrice(p.trailing_sl) : "—"}</span>
-      </div>
-      <div>
-        <span className="text-text-muted block mb-0.5">Liquidation</span>
-        <span className="font-mono font-medium text-loss">{p.liquidation_price ? formatPrice(p.liquidation_price) : "—"}</span>
-      </div>
-      <div>
-        <span className="text-text-muted block mb-0.5">Funding Paid</span>
-        <span className={`font-mono font-medium ${p.funding_paid < 0 ? "text-loss" : p.funding_paid > 0 ? "text-profit" : "text-text-muted"}`}>
-          {p.funding_paid !== 0 ? formatUsd(p.funding_paid) : "—"}
-        </span>
-      </div>
-      <div>
-        <span className="text-text-muted block mb-0.5">
-          {p.direction === "LONG" ? "Max Price" : "Min Price"}
-        </span>
-        <span className="font-mono font-medium text-text-primary">
-          {p.direction === "LONG"
-            ? p.max_price_seen ? formatPrice(p.max_price_seen) : "—"
-            : p.min_price_seen ? formatPrice(p.min_price_seen) : "—"
-          }
-        </span>
-      </div>
-      {p.exit_price && (
-        <div>
-          <span className="text-text-muted block mb-0.5">Exit Price</span>
-          <span className="font-mono font-medium text-text-primary">{formatPrice(p.exit_price)}</span>
-        </div>
-      )}
-      {p.close_reason && (
-        <div>
-          <span className="text-text-muted block mb-0.5">Close Reason</span>
-          <span className="font-medium text-text-secondary">{p.close_reason}</span>
+
+      {/* Exit scenarios */}
+      {hasAnyScenario && (
+        <div className="p-4 bg-bg-secondary rounded-lg border border-border-light text-xs">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-text-muted font-medium uppercase tracking-wider text-[11px]">Exit Scenarios</span>
+            <span className="text-text-muted">Entry Value: <span className="font-mono text-text-primary font-medium">{formatUsd(entryValue)}</span></span>
+          </div>
+          <div className="space-y-0.5">
+            {hasTrailing && (
+              <ExitRow
+                label="Trailing SL"
+                price={p.trailing_sl!}
+                pnl={computePnl(p.direction, p.entry_price, p.trailing_sl!, p.quantity)}
+                active
+              />
+            )}
+            {hasSl && (
+              <ExitRow
+                label="Stop Loss"
+                price={p.stop_loss!}
+                pnl={computePnl(p.direction, p.entry_price, p.stop_loss!, p.quantity)}
+              />
+            )}
+            {hasTp && (
+              <ExitRow
+                label="Take Profit"
+                price={p.take_profit!}
+                pnl={computePnl(p.direction, p.entry_price, p.take_profit!, p.quantity)}
+              />
+            )}
+          </div>
         </div>
       )}
     </div>
