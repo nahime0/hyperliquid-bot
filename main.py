@@ -91,7 +91,7 @@ class Bot:
         self._market_data = MarketData(self._client, settings)
         self._advisor = AIAdvisor(config=settings.ai, db=self._db)
         self._positions = PositionTracker(self._db, settings.risk, market_data=self._market_data)
-        self._risk = RiskManager(settings.risk, self._client, self._db, self._positions, market_config=settings.market, market_data=self._market_data, ai_min_confidence=settings.ai.min_confidence)
+        self._risk = RiskManager(settings.risk, self._client, self._db, self._positions, market_config=settings.market, market_data=self._market_data, ai_min_confidence=settings.ai.min_confidence, hl_config=settings.hyperliquid)
 
         # Autonomous components
         self._trend_filter = TrendFilter(self._market_data)
@@ -296,6 +296,14 @@ class Bot:
                 strat.set_max_funding_rate(cfg.max_funding_rate)
         await self._strategy.start()
 
+        # Restore cooldown state from DB
+        try:
+            cd_state_str = await self._db.get_state("cooldown_state")
+            if cd_state_str:
+                self._cooldown.load_state(json.loads(cd_state_str))
+        except Exception:
+            logger.debug("Failed to restore cooldown state", exc_info=True)
+
         # Risk manager
         self._risk.set_active_pairs(self._active_coins)
         await self._risk.start()
@@ -427,8 +435,10 @@ class Bot:
         # 3. Refresh asset contexts (funding + OI for all coins)
         asset_ctx_map = await self._fetch_asset_contexts()
 
-        # 3b. Extract funding rates from asset contexts and pass to strategies
+        # 3b. Extract funding rates from asset contexts and pass to strategies + risk manager
         await self._refresh_funding()
+        if self._funding_cache:
+            self._risk.set_funding_rates(self._funding_cache)
 
         # 4. Update strategies
         await self._trend_filter.update(self._active_coins)
@@ -869,6 +879,7 @@ class Bot:
                 closed_this_cycle.add(decision.symbol)
                 if pnl is not None:
                     self._cooldown.record_trade_result(decision.symbol, pnl > 0)
+                    await self._save_cooldown_state()
 
             await self._risk.refresh()
             metrics = self._risk.get_risk_metrics()
@@ -1040,6 +1051,8 @@ class Bot:
                 pass
             try:
                 await self._market_data.refresh_mid_prices()
+                # Kill switch check (every 2s — faster than tick loop)
+                await self._risk.refresh_balance_only()
                 # Check for manual close requests from webapp
                 async with self._close_lock:
                     await self._process_ask_close()
@@ -1136,6 +1149,7 @@ class Bot:
                     strategy=pos["strategy"], notes=f"[PAPER] Auto: {reason}",
                 )
                 self._cooldown.record_trade_result(symbol, pnl > 0)
+                await self._save_cooldown_state()
                 await self._telegram.notify_trade(
                     action="CLOSE", symbol=symbol, qty=pos["quantity"], price=price,
                 )
@@ -1159,6 +1173,7 @@ class Bot:
                         notes=f"Auto: {reason}",
                     )
                     self._cooldown.record_trade_result(symbol, pnl > 0)
+                    await self._save_cooldown_state()
                     await self._telegram.notify_trade(
                         action="CLOSE", symbol=symbol, qty=pos["quantity"], price=price,
                     )
@@ -1209,6 +1224,7 @@ class Bot:
                     notes=f"{'[PAPER] ' if self._paper else ''}Manual close from webapp",
                 )
                 self._cooldown.record_trade_result(symbol, pnl > 0)
+                await self._save_cooldown_state()
                 await self._telegram.notify_trade(
                     action="CLOSE", symbol=symbol, qty=pos["quantity"], price=price,
                 )
@@ -1230,6 +1246,13 @@ class Bot:
                 logger.exception("Failed to manual-close %s (ask_close)", symbol)
 
     # ── Dashboard status ──────────────────────────────────────
+
+    async def _save_cooldown_state(self) -> None:
+        """Persist cooldown state to DB after trade results."""
+        try:
+            await self._db.set_state("cooldown_state", json.dumps(self._cooldown.get_state()))
+        except Exception:
+            logger.debug("Failed to save cooldown state", exc_info=True)
 
     async def _write_status(self, metrics: dict[str, Any]) -> None:
         """Write live bot state to DB for the dashboard."""
@@ -1643,6 +1666,7 @@ class Bot:
                 )
                 logger.info("[PAPER] FLIP close %s %s @ %g PnL=%.4f", old_direction, symbol, price, pnl)
                 self._cooldown.record_trade_result(symbol, pnl > 0)
+                await self._save_cooldown_state()
                 # Open new in opposite direction
                 new_leverage = decision.leverage or pos.get("leverage", self._settings.hyperliquid.default_leverage)
                 notional = (size.size_usdc * new_leverage) if size and size.size_usdc > 0 else 0
@@ -1895,6 +1919,7 @@ class Bot:
             strategy="ai_advisor", notes="FLIP close",
         )
         self._cooldown.record_trade_result(symbol, pnl > 0)
+        await self._save_cooldown_state()
         logger.info("FLIP close %s %s @ %g PnL=%.4f", old_direction, symbol, fill_price, pnl)
 
         try:

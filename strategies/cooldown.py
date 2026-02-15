@@ -84,3 +84,21 @@ class CooldownTracker:
             "global_cooldown_remaining": max(0, int(self._global_cooldown_until - now)),
             "symbol_cooldowns": active_symbol,
         }
+
+    def load_state(self, data: dict[str, object]) -> None:
+        """Restore cooldown state from a previously saved dict."""
+        now = time.time()
+        self._consecutive_losses = int(data.get("consecutive_losses", 0))
+        global_remaining = int(data.get("global_cooldown_remaining", 0))
+        if global_remaining > 0:
+            self._global_cooldown_until = now + global_remaining
+        symbol_cds = data.get("symbol_cooldowns", {})
+        if isinstance(symbol_cds, dict):
+            for sym, remaining in symbol_cds.items():
+                remaining_sec = int(remaining)
+                if remaining_sec > 0:
+                    self._symbol_cooldowns[sym] = now + remaining_sec
+        logger.info(
+            "Cooldown state restored: %d consecutive losses, global_cd=%ds, %d symbol cooldowns",
+            self._consecutive_losses, global_remaining, len(self._symbol_cooldowns),
+        )
