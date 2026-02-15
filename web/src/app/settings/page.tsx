@@ -107,6 +107,8 @@ const SECTIONS: Section[] = [
       { key: "risk_partial_tp_enabled", label: "Partial TP", type: "boolean", description: "Auto-close partial at trigger" },
       { key: "risk_partial_tp_pct", label: "Partial TP Size", type: "float", min: 10, max: 90, step: 5, unit: "%", description: "% of position to close" },
       { key: "risk_partial_tp_trigger_pct", label: "Partial TP Trigger", type: "float", min: 0.5, max: 10, step: 0.1, unit: "%", description: "Trigger when gain exceeds this" },
+      { key: "risk_min_expected_move_ratio", label: "Min Expected Move Ratio", type: "float", min: 1.0, max: 5.0, step: 0.1, description: "Block entry if expected_move < trailing_breakeven x this value" },
+      { key: "risk_slippage_estimate", label: "Slippage Estimate", type: "float", min: 0, max: 0.01, step: 0.0001, description: "Estimated slippage per leg (added to fees in PnL calculations)" },
     ],
   },
   {
@@ -501,13 +503,28 @@ function SectionCard({
   config,
   localChanges,
   onChange,
+  search,
 }: {
   section: Section;
   config: BotConfig;
   localChanges: Record<string, unknown>;
   onChange: (key: string, val: unknown) => void;
+  search: string;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+
+  const filteredFields = search
+    ? section.fields.filter((f) => {
+        const q = search.toLowerCase();
+        return (
+          f.key.toLowerCase().includes(q) ||
+          f.label.toLowerCase().includes(q) ||
+          (f.description ?? "").toLowerCase().includes(q)
+        );
+      })
+    : section.fields;
+
+  if (search && filteredFields.length === 0) return null;
 
   return (
     <div className="bg-bg-card border border-border rounded-xl overflow-hidden">
@@ -541,7 +558,7 @@ function SectionCard({
       {!collapsed && (
         <div className="border-t border-border">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-4 p-5">
-            {section.fields.map((field) => {
+            {filteredFields.map((field) => {
               const currentValue = field.key in localChanges ? localChanges[field.key] : config[field.key];
               const isChanged = field.key in localChanges;
 
@@ -561,6 +578,7 @@ function SectionCard({
                       {field.description && (
                         <p className="text-[11px] text-text-muted">{field.description}</p>
                       )}
+                      <p className="text-[10px] text-text-muted/50 font-mono">{field.key}</p>
                     </div>
                   </div>
                 );
@@ -578,6 +596,7 @@ function SectionCard({
                   {field.description && (
                     <p className="text-[11px] text-text-muted">{field.description}</p>
                   )}
+                  <p className="text-[10px] text-text-muted/50 font-mono">{field.key}</p>
                 </div>
               );
             })}
@@ -637,6 +656,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saveResult, setSaveResult] = useState<{ ok: boolean; count: number; error?: string } | null>(null);
   const [activeSection, setActiveSection] = useState(SECTIONS[0].id);
+  const [search, setSearch] = useState("");
   const sectionRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const handleChange = useCallback((key: string, val: unknown) => {
@@ -779,6 +799,33 @@ export default function SettingsPage() {
           <h2 className="text-lg font-bold text-text-primary">Settings</h2>
         </div>
 
+        {/* Search */}
+        <div className="mb-4">
+          <div className="relative">
+            <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-text-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" />
+            </svg>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search settings..."
+              className="w-full bg-bg-card border border-border rounded-xl pl-10 pr-4 py-2.5 text-sm text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-accent/40 focus:border-accent transition-colors"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => setSearch("")}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary transition-colors"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </div>
+        </div>
+
         {/* Sections */}
         <div className="space-y-4">
           {SECTIONS.map((section) => (
@@ -792,6 +839,7 @@ export default function SettingsPage() {
                 config={config}
                 localChanges={localChanges}
                 onChange={handleChange}
+                search={search}
               />
             </div>
           ))}

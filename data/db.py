@@ -200,8 +200,8 @@ CREATE TABLE IF NOT EXISTS bot_config (
     risk_liquidation_buffer_pct REAL NOT NULL DEFAULT 5.0,
     risk_sl_tp_grace_seconds INTEGER NOT NULL DEFAULT 30,
     risk_trailing_half_pct REAL NOT NULL DEFAULT 0.5,
-    risk_trailing_breakeven_pct REAL NOT NULL DEFAULT 0.5,
-    risk_trailing_start_pct REAL NOT NULL DEFAULT 1.5,
+    risk_trailing_breakeven_pct REAL NOT NULL DEFAULT 0.6,
+    risk_trailing_start_pct REAL NOT NULL DEFAULT 0.8,
     risk_trailing_distance_pct REAL NOT NULL DEFAULT 1.0,
     risk_trailing_tight_pct REAL NOT NULL DEFAULT 2.5,
     risk_trailing_tight_distance_pct REAL NOT NULL DEFAULT 0.75,
@@ -213,7 +213,7 @@ CREATE TABLE IF NOT EXISTS bot_config (
     risk_use_atr_sl INTEGER NOT NULL DEFAULT 1,
     risk_atr_sl_multiplier REAL NOT NULL DEFAULT 2.5,
     risk_atr_sl_min_pct REAL NOT NULL DEFAULT 0.8,
-    risk_atr_sl_max_pct REAL NOT NULL DEFAULT 3.0,
+    risk_atr_sl_max_pct REAL NOT NULL DEFAULT 2.5,
     risk_risk_per_trade_pct REAL NOT NULL DEFAULT 1.0,
     risk_partial_tp_enabled INTEGER NOT NULL DEFAULT 0,
     risk_partial_tp_pct REAL NOT NULL DEFAULT 50.0,
@@ -224,6 +224,8 @@ CREATE TABLE IF NOT EXISTS bot_config (
     risk_atr_trailing_tight_multiplier REAL NOT NULL DEFAULT 1.0,
     risk_atr_trailing_min_pct REAL NOT NULL DEFAULT 0.5,
     risk_atr_trailing_max_pct REAL NOT NULL DEFAULT 2.0,
+    risk_min_expected_move_ratio REAL NOT NULL DEFAULT 1.5,
+    risk_slippage_estimate REAL NOT NULL DEFAULT 0.0003,
 
     -- market_ : Market/discovery
     market_min_pair_volume REAL NOT NULL DEFAULT 50000.0,
@@ -339,6 +341,11 @@ _MIGRATIONS = [
     "ALTER TABLE positions ADD COLUMN ask_close INTEGER DEFAULT 0",
     "ALTER TABLE deferred_opportunities ADD COLUMN strategy_type TEXT NOT NULL DEFAULT 'unknown'",
     "ALTER TABLE deferred_opportunities ADD COLUMN confidence REAL NOT NULL DEFAULT 0.0",
+    # Phase 24: new config columns
+    "ALTER TABLE bot_config ADD COLUMN risk_min_expected_move_ratio REAL NOT NULL DEFAULT 1.5",
+    "ALTER TABLE bot_config ADD COLUMN risk_slippage_estimate REAL NOT NULL DEFAULT 0.0003",
+    # Trading active flag
+    "ALTER TABLE bot_config ADD COLUMN main_trading_active INTEGER NOT NULL DEFAULT 1",
 ]
 
 # Multi-statement migration: rebuild deferred_opportunities with correct UNIQUE constraint
