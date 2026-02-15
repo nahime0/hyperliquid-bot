@@ -65,9 +65,6 @@ logger = get_logger(__name__)
 # Balance snapshot interval (seconds)
 BALANCE_SNAPSHOT_INTERVAL = 300  # 5 minutes
 
-# Funding rate refresh interval (cycles)
-FUNDING_REFRESH_INTERVAL = 5  # every 5 cycles (~5 min)
-
 
 class Bot:
     """Top-level orchestrator that owns all components."""
@@ -427,12 +424,11 @@ class Bot:
         # 2. Refresh mid prices via REST (WS allMids disabled)
         await self._market_data.refresh_mid_prices()
 
-        # 3. Refresh funding rates periodically
-        if self._cycle_count % FUNDING_REFRESH_INTERVAL == 1:
-            await self._refresh_funding()
-
-        # 3b. Refresh asset contexts (funding + OI for all coins)
+        # 3. Refresh asset contexts (funding + OI for all coins)
         asset_ctx_map = await self._fetch_asset_contexts()
+
+        # 3b. Extract funding rates from asset contexts and pass to strategies
+        await self._refresh_funding()
 
         # 4. Update strategies
         await self._trend_filter.update(self._active_coins)
@@ -917,13 +913,34 @@ class Bot:
     # ── Funding rate refresh ──────────────────────────────────
 
     async def _refresh_funding(self) -> None:
-        """Refresh funding rates and pass to strategy."""
-        try:
-            # Hyperliquid doesn't have a direct funding endpoint in the basic SDK,
-            # but we can get it from clearinghouse state. For now, skip if unavailable.
-            pass
-        except Exception:
-            logger.debug("Failed to refresh funding rates", exc_info=True)
+        """Extract funding rates from asset contexts and pass to strategies.
+
+        Called from _tick() after _fetch_asset_contexts() populates _asset_ctx_map.
+        Each asset context has a "funding" field with the current funding rate.
+        """
+        funding_rates: dict[str, float] = {}
+        for symbol, ctx in self._asset_ctx_map.items():
+            rate = ctx.get("funding")
+            if rate is not None:
+                try:
+                    funding_rates[symbol] = float(rate)
+                except (ValueError, TypeError):
+                    pass
+
+        if funding_rates:
+            self._funding_cache = funding_rates
+            # Propagate to strategy (MultiStrategy propagates to all sub-strategies)
+            if hasattr(self._strategy, "set_funding_rates"):
+                self._strategy.set_funding_rates(funding_rates)
+            logger.debug(
+                "Funding rates updated: %d coins, extremes: %s",
+                len(funding_rates),
+                ", ".join(
+                    f"{s}={r:.6f}" for s, r in sorted(
+                        funding_rates.items(), key=lambda x: abs(x[1]), reverse=True,
+                    )[:5]
+                ),
+            )
 
     async def _reconcile_positions(self) -> None:
         """Reconcile position tracker with Hyperliquid on startup.
