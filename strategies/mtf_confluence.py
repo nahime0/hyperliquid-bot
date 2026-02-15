@@ -345,6 +345,7 @@ class MtfConfluenceStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[MTF LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = abs(50 - sig.rsi_5m) / 50 * 2.0
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -356,6 +357,7 @@ class MtfConfluenceStrategy(Strategy):
             ),
             strategy_type=self.strategy_type,
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_short_entry(self, symbol: str, sig: MtfSignal) -> Decision | None:
@@ -433,6 +435,7 @@ class MtfConfluenceStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[MTF SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = abs(50 - sig.rsi_5m) / 50 * 2.0
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -444,6 +447,7 @@ class MtfConfluenceStrategy(Strategy):
             ),
             strategy_type=self.strategy_type,
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     # -- Exit checks --
@@ -530,6 +534,7 @@ class MtfConfluenceStrategy(Strategy):
                     "rsi_15m_slope": sig.rsi_15m_slope,
                     "trend_1h": sig.trend_1h,
                     "volume_ratio": sig.volume_ratio,
+                    "expected_move_pct": round(abs(50 - sig.rsi_5m) / 50 * 2.0, 2) if sig.rsi_5m is not None else None,
                 },
             )
         except Exception:

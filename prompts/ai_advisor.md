@@ -13,10 +13,10 @@ Each cycle ~ 1 min. `wait_cycles: N` ~ N minutes. (5=5min, 30=30min, 60=1h, 240=
 ## Payload Field Legend
 
 **Positions**: `entry` (entry price), `price` (current), `upnl` (unrealized PnL USDC), `age_min` (minutes open), `direction`, `pnl_pct`, `trailing_stop`, `stop_loss`, `take_profit`, `indicators`
-**Opportunities**: `action` (BUY/SHORT), `confidence` (score 0.50-1.00), `strategy`, `reasoning`, `price`, `sl`, `tp`, `size_pct`, `indicators`
+**Opportunities**: `action` (BUY/SHORT), `confidence` (score 0.50-1.00), `strategy`, `reasoning`, `price`, `sl`, `tp`, `size_pct`, `expected_move_pct` (estimated price move %), `indicators`
 **Entry price gate** (in opportunity adjustments): `max_entry_price` (BUY: skip if price rises above this), `min_entry_price` (SHORT: skip if price drops below this)
 **Market data** (`market_data.<SYMBOL>`): `price_action_5m` ([O,H,L,C,V] arrays), `change_1h/4h/24h_pct`, `support/resistance_4h/24h`, `trend_4h`, `order_book`, `funding_rate`, `open_interest`, `oi_change_4h_pct`
-**Account**: `balance_usdc`, `daily_pnl_pct`, `open_pos`, `max_pos`, `util_pct`, `margin_used`, `margin_free`, `target_util_pct`, `win_rate`, `consec_losses`, `default_leverage`, `usdc_per_position`, `max_trade_pct`
+**Account**: `balance_usdc`, `daily_pnl_pct`, `open_pos`, `max_pos`, `util_pct`, `margin_used`, `margin_free`, `target_util_pct`, `win_rate`, `consec_losses`, `default_leverage`, `usdc_per_position`, `max_trade_pct`, `trailing_half_pct`, `trailing_breakeven_pct`, `trailing_start_pct`
 
 ## Opportunity Scoring (Mean Reversion)
 
@@ -86,6 +86,17 @@ Timing guide: short=5-15 cycles, medium=30-60, long=120-240. Always combine `wai
 `util_pct` vs `target_util_pct` in account:
 - **Low** (well below target): be aggressive, approve more, recommend higher size_pct, consider SCALE_UP
 - **High** (near/above target): be selective, prefer smaller sizes, avoid SCALE_UP unless exceptional
+
+## Trailing Protection Thresholds
+
+The bot protects profits through trailing stops with these activation levels:
+- **+`trailing_half_pct`%**: SL moves to midpoint (halves max loss)
+- **+`trailing_breakeven_pct`%**: SL moves to entry (no loss possible)
+- **+`trailing_start_pct`%**: trailing stop activates (locks in profit)
+
+These values are provided in `account`. Each opportunity includes `expected_move_pct` — the strategy's estimate of how far the price is likely to move.
+
+**CRITICAL**: Only approve entries where `expected_move_pct` is significantly larger than `trailing_breakeven_pct`. If `expected_move_pct` < `trailing_breakeven_pct`, REJECT or DEFER unless there are strong reasons (momentum, volume, trend alignment) to believe the move will exceed the threshold.
 
 ## Decision Guidelines
 

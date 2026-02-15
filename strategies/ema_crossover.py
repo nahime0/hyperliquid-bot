@@ -356,6 +356,7 @@ class EmaCrossoverStrategy(Strategy):
         rsi_str = f"{sig.rsi:.1f}" if sig.rsi is not None else "N/A"
 
         logger.debug("[EMA LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = abs(sig.ema_fast - sig.ema_slow) / sig.price * 100
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -367,6 +368,7 @@ class EmaCrossoverStrategy(Strategy):
             ),
             strategy_type="ema_crossover",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_short_entry(self, symbol: str, sig: EmaCrossSignal) -> Decision | None:
@@ -439,6 +441,7 @@ class EmaCrossoverStrategy(Strategy):
         rsi_str = f"{sig.rsi:.1f}" if sig.rsi is not None else "N/A"
 
         logger.debug("[EMA SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = abs(sig.ema_fast - sig.ema_slow) / sig.price * 100
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -450,6 +453,7 @@ class EmaCrossoverStrategy(Strategy):
             ),
             strategy_type="ema_crossover",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_long_exit(self, symbol: str, sig: EmaCrossSignal) -> Decision | None:
@@ -516,6 +520,7 @@ class EmaCrossoverStrategy(Strategy):
                     "volume_ratio": sig.volume_ratio,
                     "ema_fast": sig.ema_fast,
                     "ema_slow": sig.ema_slow,
+                    "expected_move_pct": round(abs(sig.ema_fast - sig.ema_slow) / sig.price * 100, 2) if sig.ema_fast and sig.ema_slow and sig.price else None,
                 },
             )
         except Exception:

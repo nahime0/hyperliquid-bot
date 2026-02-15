@@ -384,6 +384,7 @@ class SessionMomentumStrategy(Strategy):
         rsi_str = f"{sig.rsi:.1f}" if sig.rsi is not None else "N/A"
 
         logger.debug("[SM LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = abs(sig.session_change)
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -395,6 +396,7 @@ class SessionMomentumStrategy(Strategy):
             ),
             strategy_type="session_momentum",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_short_entry(self, symbol: str, sig: SessionSignal) -> Decision | None:
@@ -469,6 +471,7 @@ class SessionMomentumStrategy(Strategy):
         rsi_str = f"{sig.rsi:.1f}" if sig.rsi is not None else "N/A"
 
         logger.debug("[SM SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = abs(sig.session_change)
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -480,6 +483,7 @@ class SessionMomentumStrategy(Strategy):
             ),
             strategy_type="session_momentum",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_exit(self, symbol: str, sig: SessionSignal, pos: dict) -> Decision | None:
@@ -544,6 +548,7 @@ class SessionMomentumStrategy(Strategy):
                     "rsi": round(sig.rsi, 2) if sig.rsi is not None else None,
                     "trend_1h": sig.trend_1h,
                     "volume_ratio": sig.volume_ratio,
+                    "expected_move_pct": round(abs(sig.session_change), 2) if sig.session_change is not None else None,
                 },
             )
         except Exception:

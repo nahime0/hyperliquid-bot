@@ -258,6 +258,15 @@ class RiskManager:
         if decision.confidence < self._ai_min_confidence:
             return await self._block(decision, f"Confidence {decision.confidence:.2f} below minimum {self._ai_min_confidence}")
 
+        # ── Expected move gate ──
+        if decision.action in ("BUY", "SHORT") and decision.expected_move_pct is not None:
+            min_move = self._config.trailing_breakeven_pct
+            if decision.expected_move_pct < min_move:
+                return await self._block(
+                    decision,
+                    f"expected move {decision.expected_move_pct:.2f}% < trailing breakeven {min_move:.2f}%",
+                )
+
         # ── Step 1: Compute SL (before sizing) ──
         sl_distance_pct: float | None = None
         if decision.action in ("BUY", "SHORT") and decision.stop_loss is None:
@@ -317,10 +326,12 @@ class RiskManager:
                 risk = abs(price - decision.stop_loss)
                 reward = abs(decision.take_profit - price)
                 if risk > 0 and reward / risk < self._config.min_rr_ratio:
+                    reward_pct = reward / price * 100
+                    risk_pct = risk / price * 100
                     return await self._block(
                         decision,
                         f"R:R {reward / risk:.2f} < {self._config.min_rr_ratio} "
-                        f"(reward={reward:.2f}, risk={risk:.2f})",
+                        f"(reward={reward_pct:.2f}%, risk={risk_pct:.2f}%)",
                     )
 
         # ── Step 3: Position sizing (Kelly + utilization boost + risk cap) ──

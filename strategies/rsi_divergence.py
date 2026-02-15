@@ -357,6 +357,7 @@ class RSIDivergenceStrategy(Strategy):
             return None
 
         logger.debug("[RD LONG] %s: %s → SIGNAL GENERATED", symbol, diag)
+        expected_move = abs(sig.rsi - 50) / 50 * 2.0 if sig.rsi is not None else 0.0
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -364,6 +365,7 @@ class RSIDivergenceStrategy(Strategy):
             reasoning=f"[RSIDiv LONG] {symbol}: {sig.reason}, trend={sig.trend}",
             strategy_type="rsi_divergence",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_short_entry(self, symbol: str, sig: DivergenceSignal) -> Decision | None:
@@ -382,6 +384,7 @@ class RSIDivergenceStrategy(Strategy):
             return None
 
         logger.debug("[RD SHORT] %s: %s → SIGNAL GENERATED", symbol, diag)
+        expected_move = abs(sig.rsi - 50) / 50 * 2.0 if sig.rsi is not None else 0.0
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -389,6 +392,7 @@ class RSIDivergenceStrategy(Strategy):
             reasoning=f"[RSIDiv SHORT] {symbol}: {sig.reason}, trend={sig.trend}",
             strategy_type="rsi_divergence",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     async def _log_signal(self, decision: Decision, sig: DivergenceSignal) -> None:
@@ -408,6 +412,7 @@ class RSIDivergenceStrategy(Strategy):
                     "rsi": round(sig.rsi, 2) if sig.rsi is not None else None,
                     "trend": sig.trend,
                     "reason": sig.reason,
+                    "expected_move_pct": round(abs(sig.rsi - 50) / 50 * 2.0, 2) if sig.rsi is not None else None,
                 },
             )
         except Exception:

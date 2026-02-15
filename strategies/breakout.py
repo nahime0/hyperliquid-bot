@@ -436,6 +436,7 @@ class BreakoutStrategy(Strategy):
         strength_str = f"{sig.breakout_strength:.2f}%" if sig.breakout_strength is not None else "N/A"
 
         logger.debug("[BO LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = sig.breakout_strength if sig.breakout_strength is not None else 0.0
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -448,6 +449,7 @@ class BreakoutStrategy(Strategy):
             ),
             strategy_type="breakout",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_short_entry(self, symbol: str, sig: BreakoutSignal) -> Decision | None:
@@ -546,6 +548,7 @@ class BreakoutStrategy(Strategy):
         strength_str = f"{sig.breakout_strength:.2f}%" if sig.breakout_strength is not None else "N/A"
 
         logger.debug("[BO SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = sig.breakout_strength if sig.breakout_strength is not None else 0.0
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -558,6 +561,7 @@ class BreakoutStrategy(Strategy):
             ),
             strategy_type="breakout",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     # -- Event logging --
@@ -583,6 +587,7 @@ class BreakoutStrategy(Strategy):
                     "clean_break": sig.clean_break,
                     "volume_ratio": sig.volume_ratio,
                     "trend_1h": sig.trend_1h,
+                    "expected_move_pct": round(sig.breakout_strength, 2) if sig.breakout_strength is not None else None,
                 },
             )
         except Exception:

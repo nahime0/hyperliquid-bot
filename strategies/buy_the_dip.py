@@ -353,6 +353,7 @@ class BuyTheDipStrategy(Strategy):
         rsi_str = f"{sig.rsi_5m:.1f}" if sig.rsi_5m is not None else "N/A"
 
         logger.debug("[BTD LONG] %s: score=%.3f -- %s", symbol, score, ", ".join(components))
+        expected_move = abs(sig.dip_pct)
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -364,6 +365,7 @@ class BuyTheDipStrategy(Strategy):
             ),
             strategy_type="buy_the_dip",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_exit(self, symbol: str, sig: BtdSignal) -> Decision | None:
@@ -409,6 +411,7 @@ class BuyTheDipStrategy(Strategy):
                     "volume_ratio": sig.volume_ratio,
                     "rsi_5m": sig.rsi_5m,
                     "pre_dip_high": sig.pre_dip_high,
+                    "expected_move_pct": round(abs(sig.dip_pct), 2) if sig.dip_pct is not None else None,
                 },
             )
         except Exception:

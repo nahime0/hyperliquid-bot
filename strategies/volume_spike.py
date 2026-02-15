@@ -386,6 +386,7 @@ class VolumeSpikeStrategy(Strategy):
             return None
 
         logger.debug("[VS LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = sig.pattern_strength * 2.0 if sig.pattern_strength is not None else 0.0
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -393,11 +394,12 @@ class VolumeSpikeStrategy(Strategy):
             reasoning=(
                 f"[VolSpike LONG] {symbol}: score={score:.3f} — "
                 f"spike={sig.spike_ratio:.1f}x, pattern={sig.candle_pattern or 'none'}, "
-                f"bb_pct={sig.bb_pct:.2f if sig.bb_pct is not None else 'N/A'}, "
+                f"bb_pct={f'{sig.bb_pct:.2f}' if sig.bb_pct is not None else 'N/A'}, "
                 f"trend={sig.trend_1h}"
             ),
             strategy_type="volume_spike",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_short_entry(self, symbol: str, sig: VolumeSignal) -> Decision | None:
@@ -466,6 +468,7 @@ class VolumeSpikeStrategy(Strategy):
             return None
 
         logger.debug("[VS SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = sig.pattern_strength * 2.0 if sig.pattern_strength is not None else 0.0
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -473,11 +476,12 @@ class VolumeSpikeStrategy(Strategy):
             reasoning=(
                 f"[VolSpike SHORT] {symbol}: score={score:.3f} — "
                 f"spike={sig.spike_ratio:.1f}x, pattern={sig.candle_pattern or 'none'}, "
-                f"bb_pct={sig.bb_pct:.2f if sig.bb_pct is not None else 'N/A'}, "
+                f"bb_pct={f'{sig.bb_pct:.2f}' if sig.bb_pct is not None else 'N/A'}, "
                 f"trend={sig.trend_1h}"
             ),
             strategy_type="volume_spike",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_long_exit(self, symbol: str, sig: VolumeSignal) -> Decision | None:
@@ -526,6 +530,7 @@ class VolumeSpikeStrategy(Strategy):
                     "rsi": sig.rsi,
                     "bb_pct": sig.bb_pct,
                     "trend_1h": sig.trend_1h,
+                    "expected_move_pct": round(sig.pattern_strength * 2.0, 2) if sig.pattern_strength is not None else None,
                 },
             )
         except Exception:

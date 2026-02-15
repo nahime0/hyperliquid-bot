@@ -459,6 +459,7 @@ class MeanReversionStrategy(Strategy):
         rsi_1h_str = f"{sig.rsi_1h:.1f}" if sig.rsi_1h is not None else "N/A"
 
         logger.debug("[MR LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = abs(sig.price - sig.bb_mid) / sig.price * 100
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -470,6 +471,7 @@ class MeanReversionStrategy(Strategy):
             ),
             strategy_type="mean_reversion",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_short_entry(self, symbol: str, sig: Signal) -> Decision | None:
@@ -548,6 +550,7 @@ class MeanReversionStrategy(Strategy):
         rsi_1h_str = f"{sig.rsi_1h:.1f}" if sig.rsi_1h is not None else "N/A"
 
         logger.debug("[MR SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = abs(sig.price - sig.bb_mid) / sig.price * 100
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -559,6 +562,7 @@ class MeanReversionStrategy(Strategy):
             ),
             strategy_type="mean_reversion",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     async def _log_signal(self, decision: Decision, sig: Signal) -> None:
@@ -580,6 +584,7 @@ class MeanReversionStrategy(Strategy):
                     "bb_pct": sig.bb_pct,
                     "trend": sig.trend,
                     "volume_ratio": sig.volume_ratio,
+                    "expected_move_pct": round(abs(sig.price - sig.bb_mid) / sig.price * 100, 2) if sig.price and sig.bb_mid else None,
                 },
             )
         except Exception:

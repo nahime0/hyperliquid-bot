@@ -342,6 +342,7 @@ class TrendFollowingStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[TF SHORT] %s: score=%.2f — %s", symbol, score, ", ".join(components))
+        expected_move = abs(sig.change_4h)
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -353,6 +354,7 @@ class TrendFollowingStrategy(Strategy):
             ),
             strategy_type="trend_following",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_long_entry(self, symbol: str, sig: TrendSignal) -> Decision | None:
@@ -411,6 +413,7 @@ class TrendFollowingStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[TF LONG] %s: score=%.2f — %s", symbol, score, ", ".join(components))
+        expected_move = abs(sig.change_4h)
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -422,6 +425,7 @@ class TrendFollowingStrategy(Strategy):
             ),
             strategy_type="trend_following",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_short_exit(self, symbol: str, sig: TrendSignal) -> Decision | None:
@@ -484,6 +488,7 @@ class TrendFollowingStrategy(Strategy):
                     "trend_1h": sig.trend_1h,
                     "trend_4h": sig.trend_4h,
                     "volume_ratio": sig.volume_ratio,
+                    "expected_move_pct": round(abs(sig.change_4h), 2) if sig.change_4h is not None else None,
                 },
             )
         except Exception:

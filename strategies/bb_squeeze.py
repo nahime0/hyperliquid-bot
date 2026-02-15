@@ -379,6 +379,7 @@ class BbSqueezeStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[BBS LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = (sig.bb_upper - sig.bb_lower) / sig.bb_mid * 100
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -390,6 +391,7 @@ class BbSqueezeStrategy(Strategy):
             ),
             strategy_type="bb_squeeze",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_short_entry(self, symbol: str, sig: BbsSignal) -> Decision | None:
@@ -464,6 +466,7 @@ class BbSqueezeStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[BBS SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = (sig.bb_upper - sig.bb_lower) / sig.bb_mid * 100
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -475,6 +478,7 @@ class BbSqueezeStrategy(Strategy):
             ),
             strategy_type="bb_squeeze",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_long_exit(self, symbol: str, sig: BbsSignal) -> Decision | None:
@@ -532,6 +536,7 @@ class BbSqueezeStrategy(Strategy):
                     "bb_upper": sig.bb_upper,
                     "bb_lower": sig.bb_lower,
                     "bb_mid": sig.bb_mid,
+                    "expected_move_pct": round((sig.bb_upper - sig.bb_lower) / sig.bb_mid * 100, 2) if sig.bb_upper and sig.bb_lower and sig.bb_mid else None,
                 },
             )
         except Exception:

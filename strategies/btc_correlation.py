@@ -341,6 +341,7 @@ class BtcCorrelationStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[BTC_CORR LONG] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = abs(sig.lag)
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -352,6 +353,7 @@ class BtcCorrelationStrategy(Strategy):
             ),
             strategy_type="btc_correlation",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_short_entry(self, symbol: str, sig: BtcCorrSignal) -> Decision | None:
@@ -414,6 +416,7 @@ class BtcCorrelationStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[BTC_CORR SHORT] %s: score=%.3f — %s", symbol, score, ", ".join(components))
+        expected_move = abs(sig.lag)
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -425,6 +428,7 @@ class BtcCorrelationStrategy(Strategy):
             ),
             strategy_type="btc_correlation",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_long_exit(self, symbol: str, sig: BtcCorrSignal) -> Decision | None:
@@ -486,6 +490,7 @@ class BtcCorrelationStrategy(Strategy):
                     "lag": sig.lag,
                     "volume_ratio": sig.volume_ratio,
                     "trend_1h": sig.trend_1h,
+                    "expected_move_pct": round(abs(sig.lag), 2) if sig.lag is not None else None,
                 },
             )
         except Exception:

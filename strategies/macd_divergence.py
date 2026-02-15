@@ -481,6 +481,7 @@ class MacdDivergenceStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[MD LONG] %s: score=%.3f -- %s", symbol, score, ", ".join(components))
+        expected_move = sig.divergence_strength * 2.0
         return Decision(
             action="BUY",
             symbol=symbol,
@@ -493,6 +494,7 @@ class MacdDivergenceStrategy(Strategy):
             ),
             strategy_type="macd_divergence",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     def _check_short_entry(self, symbol: str, sig: MacdDivSignal) -> Decision | None:
@@ -568,6 +570,7 @@ class MacdDivergenceStrategy(Strategy):
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
 
         logger.debug("[MD SHORT] %s: score=%.3f -- %s", symbol, score, ", ".join(components))
+        expected_move = sig.divergence_strength * 2.0
         return Decision(
             action="SHORT",
             symbol=symbol,
@@ -580,6 +583,7 @@ class MacdDivergenceStrategy(Strategy):
             ),
             strategy_type="macd_divergence",
             order_type="MARKET",
+            expected_move_pct=round(expected_move, 2),
         )
 
     async def _log_signal(self, decision: Decision, sig: MacdDivSignal) -> None:
@@ -602,6 +606,7 @@ class MacdDivergenceStrategy(Strategy):
                     "histogram_rising": sig.histogram_rising,
                     "volume_ratio": sig.volume_ratio,
                     "trend_1h": sig.trend_1h,
+                    "expected_move_pct": round(sig.divergence_strength * 2.0, 2) if sig.divergence_strength is not None else None,
                 },
             )
         except Exception:

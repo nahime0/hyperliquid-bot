@@ -575,6 +575,7 @@ class Bot:
                     "sl": d.stop_loss,
                     "tp": d.take_profit,
                     "size_pct": d.size_pct,
+                    "expected_move_pct": d.expected_move_pct,
                 }
                 sym = d.symbol
                 if sym:
@@ -657,6 +658,9 @@ class Bot:
             account["default_leverage"] = self._settings.hyperliquid.default_leverage
             account["usdc_per_position"] = self._settings.risk.usdc_per_position
             account["max_trade_pct"] = self._settings.risk.max_trade_pct
+            account["trailing_half_pct"] = self._settings.risk.trailing_half_pct
+            account["trailing_breakeven_pct"] = self._settings.risk.trailing_breakeven_pct
+            account["trailing_start_pct"] = self._settings.risk.trailing_start_pct
 
             deferred_summary = self._advisor.get_deferred_summary()
             ai_response = await self._advisor.consult(
@@ -1009,11 +1013,11 @@ class Bot:
     # ── Position SL/TP monitoring ─────────────────────────────
 
     async def _sl_tp_monitor(self) -> None:
-        """Independent SL/TP check every ~5 seconds."""
-        logger.info("SL/TP monitor started (interval: 5s)")
+        """Independent SL/TP check every ~2 seconds."""
+        logger.info("SL/TP monitor started (interval: 2s)")
         while self._running:
             try:
-                await asyncio.wait_for(self._shutdown_event.wait(), timeout=5)
+                await asyncio.wait_for(self._shutdown_event.wait(), timeout=2)
                 break  # shutdown signalled
             except asyncio.TimeoutError:
                 pass

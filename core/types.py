@@ -20,4 +20,5 @@ class Decision:
     strategy_type: str | None = None  # mean_reversion, rsi_divergence, multi
     leverage: int | None = None  # AI-specified leverage override
     entry_price_limit: float | None = None  # max for BUY, min for SHORT
+    expected_move_pct: float | None = None  # estimated price move % (for trailing gate)
     raw_response: str | None = None
