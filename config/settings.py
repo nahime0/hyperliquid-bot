@@ -66,8 +66,8 @@ class RiskConfig:
     sl_tp_grace_seconds: int = 30
     # Trailing stop
     trailing_half_pct: float = 0.5        # move SL to midpoint (entry+SL)/2 after +X%
-    trailing_breakeven_pct: float = 1.0   # move SL to entry after +X%
-    trailing_start_pct: float = 1.2       # start trailing after +X%
+    trailing_breakeven_pct: float = 0.6   # move SL to entry after +X%
+    trailing_start_pct: float = 0.8       # start trailing after +X%
     trailing_distance_pct: float = 0.8    # trail at max_price - X%
     trailing_tight_pct: float = 2.0       # tighten trail after +X%
     trailing_tight_distance_pct: float = 0.4   # tight trail distance
@@ -82,7 +82,7 @@ class RiskConfig:
     use_atr_sl: bool = True               # use ATR to compute per-coin stop loss
     atr_sl_multiplier: float = 2.5        # SL = price +/- (multiplier * ATR)
     atr_sl_min_pct: float = 0.8           # floor: never tighter than 0.8%
-    atr_sl_max_pct: float = 1.5           # ceiling: never wider than 1.5%
+    atr_sl_max_pct: float = 2.5           # ceiling: never wider than 2.5%
     # Risk-based position sizing
     risk_per_trade_pct: float = 1.0       # max % of bankroll to risk per trade
     # Partial take profit
@@ -91,6 +91,10 @@ class RiskConfig:
     partial_tp_trigger_pct: float = 2.0   # trigger when gain >= +2% (after trailing starts)
     # R:R gate (only when TP is set)
     min_rr_ratio: float = 1.5            # min reward/risk ratio for entries
+    # Expected move gate
+    min_expected_move_ratio: float = 1.5  # block entry if expected_move < breakeven * ratio
+    # Slippage estimate (added to fee per leg in PnL calculations)
+    slippage_estimate: float = 0.0003
     # ATR-based trailing distance
     use_atr_trailing: bool = True
     atr_trailing_multiplier: float = 1.5       # normal trail = ATR * multiplier
@@ -226,8 +230,8 @@ def load_settings() -> Settings:
             min_balance_usdc=float(os.getenv("MIN_BALANCE_USDC", "20.0")),
             min_holding_minutes=int(os.getenv("MIN_HOLDING_MINUTES", "15")),
             trailing_half_pct=float(os.getenv("TRAILING_HALF_PCT", "0.5")),
-            trailing_breakeven_pct=float(os.getenv("TRAILING_BREAKEVEN_PCT", "1.0")),
-            trailing_start_pct=float(os.getenv("TRAILING_START_PCT", "1.2")),
+            trailing_breakeven_pct=float(os.getenv("TRAILING_BREAKEVEN_PCT", "0.6")),
+            trailing_start_pct=float(os.getenv("TRAILING_START_PCT", "0.8")),
             trailing_distance_pct=float(os.getenv("TRAILING_DISTANCE_PCT", "0.8")),
             trailing_tight_pct=float(os.getenv("TRAILING_TIGHT_PCT", "2.0")),
             trailing_tight_distance_pct=float(os.getenv("TRAILING_TIGHT_DISTANCE_PCT", "0.4")),
@@ -241,12 +245,14 @@ def load_settings() -> Settings:
             use_atr_sl=_bool(os.getenv("USE_ATR_SL"), default=True),
             atr_sl_multiplier=float(os.getenv("ATR_SL_MULTIPLIER", "2.5")),
             atr_sl_min_pct=float(os.getenv("ATR_SL_MIN_PCT", "0.8")),
-            atr_sl_max_pct=float(os.getenv("ATR_SL_MAX_PCT", "1.5")),
+            atr_sl_max_pct=float(os.getenv("ATR_SL_MAX_PCT", "2.5")),
             risk_per_trade_pct=float(os.getenv("RISK_PER_TRADE_PCT", "1.0")),
             partial_tp_enabled=_bool(os.getenv("PARTIAL_TP_ENABLED"), default=False),
             partial_tp_pct=float(os.getenv("PARTIAL_TP_PCT", "50.0")),
             partial_tp_trigger_pct=float(os.getenv("PARTIAL_TP_TRIGGER_PCT", "2.0")),
             min_rr_ratio=float(os.getenv("MIN_RR_RATIO", "1.5")),
+            min_expected_move_ratio=float(os.getenv("MIN_EXPECTED_MOVE_RATIO", "1.5")),
+            slippage_estimate=float(os.getenv("SLIPPAGE_ESTIMATE", "0.0003")),
             use_atr_trailing=_bool(os.getenv("USE_ATR_TRAILING"), default=True),
             atr_trailing_multiplier=float(os.getenv("ATR_TRAILING_MULTIPLIER", "1.5")),
             atr_trailing_tight_multiplier=float(os.getenv("ATR_TRAILING_TIGHT_MULTIPLIER", "1.0")),

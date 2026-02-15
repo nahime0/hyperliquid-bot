@@ -41,8 +41,8 @@ class TestRiskConfig:
         assert c.usdc_per_position == 40.0
         assert c.target_utilization == 0.50
         assert c.max_size_boost == 2.5
-        assert c.trailing_breakeven_pct == 1.0
-        assert c.trailing_start_pct == 1.2
+        assert c.trailing_breakeven_pct == 0.6
+        assert c.trailing_start_pct == 0.8
         assert c.trailing_distance_pct == 0.8
         assert c.trailing_tight_pct == 2.0
         assert c.trailing_tight_distance_pct == 0.4
@@ -51,7 +51,7 @@ class TestRiskConfig:
         assert c.use_atr_sl is True
         assert c.atr_sl_multiplier == 2.5
         assert c.atr_sl_min_pct == 0.8
-        assert c.atr_sl_max_pct == 1.5
+        assert c.atr_sl_max_pct == 2.5
         # Risk-based sizing
         assert c.risk_per_trade_pct == 1.0
         # Partial TP
@@ -66,6 +66,9 @@ class TestRiskConfig:
         assert c.atr_trailing_tight_multiplier == 1.0
         assert c.atr_trailing_min_pct == 0.5
         assert c.atr_trailing_max_pct == 2.0
+        # Expected move gate & slippage
+        assert c.min_expected_move_ratio == 1.5
+        assert c.slippage_estimate == 0.0003
 
     def test_frozen(self):
         c = RiskConfig()

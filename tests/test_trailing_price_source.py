@@ -84,14 +84,14 @@ class TestTrailingWithAccuratePrices:
         assert trail <= 0.1520  # Still at original SL
 
     @pytest.mark.asyncio
-    async def test_trailing_breakeven_at_1pct(self, tracker):
-        """LONG: price rises 1.1% → trailing moves to entry (breakeven, breakeven_pct=1.0%)."""
+    async def test_trailing_breakeven_at_0_7pct(self, tracker):
+        """LONG: price rises 0.7% → trailing moves to entry (breakeven, breakeven_pct=0.6%)."""
         entry = 0.15358
         await tracker.open_position(
             symbol="ME", entry_price=entry, quantity=130.0,
             stop_loss=0.1520, direction="LONG",
         )
-        price = entry * 1.011  # +1.1%
+        price = entry * 1.007  # +0.7% — above breakeven (0.6%) but below start (0.8%)
         await tracker.check_sl_tp({"ME": price})
         pos = await tracker.get_position_for_symbol("ME")
         trail = pos.get("trailing_sl")
@@ -100,7 +100,7 @@ class TestTrailingWithAccuratePrices:
 
     @pytest.mark.asyncio
     async def test_trailing_normal_at_start_pct(self, tracker):
-        """LONG: price rises 1.5% → trailing starts (max * (1 - distance%)), start_pct=1.2%."""
+        """LONG: price rises 1.5% → trailing starts (max * (1 - distance%)), start_pct=0.8%."""
         entry = 0.15358
         rc = RiskConfig()
         await tracker.open_position(
@@ -159,13 +159,13 @@ class TestTrailingWithAccuratePrices:
             symbol="ETH", entry_price=entry, quantity=0.5,
             stop_loss=1960, direction="LONG",
         )
-        # Step 1: +1.1% → breakeven (breakeven_pct=1.0%)
-        await tracker.check_sl_tp({"ETH": 2022})
+        # Step 1: +0.7% → breakeven (breakeven_pct=0.6%)
+        await tracker.check_sl_tp({"ETH": 2014})
         pos = await tracker.get_position_for_symbol("ETH")
         trail1 = pos.get("trailing_sl")
         assert trail1 == pytest.approx(entry, rel=1e-3)
 
-        # Step 2: +1.5% → normal trailing (start_pct=1.2%)
+        # Step 2: +1.5% → normal trailing (start_pct=0.8%)
         await tracker.check_sl_tp({"ETH": 2030})
         pos = await tracker.get_position_for_symbol("ETH")
         trail2 = pos.get("trailing_sl")

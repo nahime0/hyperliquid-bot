@@ -50,9 +50,10 @@ class TestOpenClose:
             symbol="ETH", entry_price=2000, quantity=1.0, direction="LONG",
         )
         pnl = await position_tracker.close_position(pid, exit_price=2100, reason="TP")
-        # Gross: (2100-2000)*1 = 100, fee: (2000+2100)*1*0.00045 = 1.845
+        # Gross: (2100-2000)*1 = 100, fee: (2000+2100)*1*(FEE+slippage)
         expected_gross = 100.0
-        expected_fee = (2000 + 2100) * 1.0 * FEE_PER_LEG
+        cost_per_leg = FEE_PER_LEG + position_tracker._slippage_estimate
+        expected_fee = (2000 + 2100) * 1.0 * cost_per_leg
         assert pnl == pytest.approx(expected_gross - expected_fee, rel=1e-6)
         assert pnl > 0
 
@@ -401,12 +402,12 @@ class TestTrailingAfterPartialClose:
             symbol="ETH", entry_price=2000, quantity=0.5,
             stop_loss=1960, take_profit=2200, direction="LONG",
         )
-        # Price at +1.1% — above breakeven_pct (1.0%) but below start_pct (1.2%)
-        await position_tracker.check_sl_tp({"ETH": 2022})
+        # Price at +0.7% — above breakeven_pct (0.6%) but below start_pct (0.8%)
+        await position_tracker.check_sl_tp({"ETH": 2014})
         pos = await position_tracker.get_position_for_symbol("ETH")
 
         trailing = pos.get("trailing_sl")
-        # 1.1% >= breakeven_pct(1.0%) → SL at entry (breakeven)
+        # 0.7% >= breakeven_pct(0.6%) → SL at entry (breakeven)
         assert trailing == pytest.approx(2000, rel=1e-4)
 
 
