@@ -351,8 +351,8 @@ export function getConfigHistory(params: {
   const { limit = 100, offset = 0, field_name } = params;
   if (field_name) {
     return getDb()
-      .prepare("SELECT * FROM config_history WHERE field_name = ? ORDER BY id DESC LIMIT ? OFFSET ?")
-      .all(field_name, limit, offset) as ConfigHistoryEntry[];
+      .prepare("SELECT * FROM config_history WHERE field_name LIKE ? ORDER BY id DESC LIMIT ? OFFSET ?")
+      .all(`%${field_name}%`, limit, offset) as ConfigHistoryEntry[];
   }
   return getDb()
     .prepare("SELECT * FROM config_history ORDER BY id DESC LIMIT ? OFFSET ?")
@@ -362,8 +362,8 @@ export function getConfigHistory(params: {
 export function getConfigHistoryCount(field_name?: string): number {
   if (field_name) {
     const row = getDb()
-      .prepare("SELECT COUNT(*) as cnt FROM config_history WHERE field_name = ?")
-      .get(field_name) as { cnt: number };
+      .prepare("SELECT COUNT(*) as cnt FROM config_history WHERE field_name LIKE ?")
+      .get(`%${field_name}%`) as { cnt: number };
     return row.cnt;
   }
   const row = getDb()
