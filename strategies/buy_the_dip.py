@@ -249,7 +249,7 @@ class BuyTheDipStrategy(Strategy):
             if pos.get("strategy") != "buy_the_dip":
                 continue
 
-            exit_d = self._check_exit(symbol, sig)
+            exit_d = self._check_exit(symbol, sig, pos)
             if exit_d:
                 decisions.append(exit_d)
 
@@ -300,6 +300,14 @@ class BuyTheDipStrategy(Strategy):
         # Dip must be negative (price dropped) and within configured range
         abs_dip = abs(sig.dip_pct)
         if sig.dip_pct >= 0 or abs_dip < self._sc.btd_dip_min_pct or abs_dip > self._sc.btd_dip_max_pct:
+            return None
+
+        # Guard: pre_dip_high must be above current price (otherwise trade is DOA)
+        if sig.pre_dip_high is not None and sig.price is not None and sig.pre_dip_high <= sig.price:
+            logger.debug(
+                "[BTD LONG] %s: skip — pre_dip_high=%.4f <= price=%.4f (no upside)",
+                symbol, sig.pre_dip_high, sig.price,
+            )
             return None
 
         # Scoring
@@ -365,18 +373,29 @@ class BuyTheDipStrategy(Strategy):
             ),
             strategy_type="buy_the_dip",
             order_type="MARKET",
+            take_profit=sig.pre_dip_high,
             expected_move_pct=round(expected_move, 2),
         )
 
-    def _check_exit(self, symbol: str, sig: BtdSignal) -> Decision | None:
-        """Exit if RSI(5m) > 70 or price recovers above pre-dip high."""
+    def _check_exit(self, symbol: str, sig: BtdSignal, pos: dict | None = None) -> Decision | None:
+        """Exit if RSI(5m) > 70 or price recovers above frozen pre-dip high (from position TP)."""
         reasons: list[str] = []
 
         if sig.rsi_5m is not None and sig.rsi_5m > RSI_EXIT_OVERBOUGHT:
             reasons.append(f"RSI_5m={sig.rsi_5m:.1f}>{RSI_EXIT_OVERBOUGHT:.0f}")
 
-        if sig.price is not None and sig.pre_dip_high is not None and sig.price >= sig.pre_dip_high:
-            reasons.append(f"price={sig.price:.4f}>=pre_dip_high={sig.pre_dip_high:.4f}")
+        # Use frozen TP from position (set at entry) instead of recalculated signal value
+        target = None
+        if pos is not None and pos.get("take_profit"):
+            target = pos["take_profit"]
+        elif sig.pre_dip_high is not None:
+            target = sig.pre_dip_high
+
+        if sig.price is not None and target is not None and sig.price >= target:
+            # Only exit if we're actually in profit (target above entry)
+            entry_price = pos.get("entry_price") if pos else None
+            if entry_price is None or sig.price > entry_price:
+                reasons.append(f"price={sig.price:.4f}>=pre_dip_high={target:.4f}")
 
         if not reasons:
             return None
