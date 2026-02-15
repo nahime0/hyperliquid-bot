@@ -7,6 +7,7 @@ export interface FieldInfo {
 
 export const FIELD_LABELS: Record<string, FieldInfo> = {
   // General
+  main_trading_active: { label: "Trading Active", section: "General" },
   main_log_level: { label: "Log Level", section: "General" },
   main_db_path: { label: "Database Path", section: "General" },
   // Hyperliquid

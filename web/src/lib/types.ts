@@ -181,6 +181,7 @@ export type AggregateStats = TradeStats & {
 // ── Bot Config ──────────────────────────────────────────
 export interface BotConfig {
   // main_
+  main_trading_active: number;
   main_log_level: string;
   main_db_path: string;
   // hl_

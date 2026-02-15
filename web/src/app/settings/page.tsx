@@ -38,6 +38,7 @@ const SECTIONS: Section[] = [
     icon: <IconCog />,
     description: "Core bot settings",
     fields: [
+      { key: "main_trading_active", label: "Trading Attivo", type: "boolean", description: "Abilita/disabilita apertura nuove posizioni" },
       { key: "main_log_level", label: "Log Level", type: "select", options: ["DEBUG", "INFO", "WARNING", "ERROR"], description: "Python logging level" },
       { key: "main_db_path", label: "Database Path", type: "text", description: "SQLite database file path" },
     ],

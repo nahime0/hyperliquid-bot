@@ -163,6 +163,7 @@ CREATE TABLE IF NOT EXISTS bot_config (
     id INTEGER PRIMARY KEY CHECK (id = 1),
 
     -- main_ : General settings
+    main_trading_active INTEGER NOT NULL DEFAULT 1,
     main_log_level TEXT NOT NULL DEFAULT 'INFO',
     main_db_path TEXT NOT NULL DEFAULT 'data/trading_bot.db',
 
