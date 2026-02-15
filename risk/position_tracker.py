@@ -37,6 +37,7 @@ class PositionTracker:
         self._db = db
         self._rc = risk_config
         self._market_data = market_data
+        self._slippage_estimate: float = risk_config.slippage_estimate if risk_config else 0.0
         self._atr_cache: dict[str, tuple[float, float, float]] = {}  # symbol → (timestamp, trail_pct, tight_pct)
         self._cycle_count: int = 0
 
@@ -103,8 +104,9 @@ class PositionTracker:
         else:  # SHORT
             pnl = (pos["entry_price"] - exit_price) * pos["quantity"]
 
-        # Fee estimate (Hyperliquid taker: 0.045% per leg)
-        fee_estimate = (pos["entry_price"] + exit_price) * pos["quantity"] * FEE_PER_LEG
+        # Fee estimate (Hyperliquid taker + slippage per leg)
+        cost_per_leg = FEE_PER_LEG + self._slippage_estimate
+        fee_estimate = (pos["entry_price"] + exit_price) * pos["quantity"] * cost_per_leg
         pnl_net = pnl - fee_estimate
 
         await self._db.db.execute(
@@ -491,7 +493,8 @@ class PositionTracker:
             pnl = (exit_price - entry) * closed_qty
         else:
             pnl = (entry - exit_price) * closed_qty
-        fee_estimate = (entry + exit_price) * closed_qty * FEE_PER_LEG
+        cost_per_leg = FEE_PER_LEG + self._slippage_estimate
+        fee_estimate = (entry + exit_price) * closed_qty * cost_per_leg
         pnl_net = pnl - fee_estimate
 
         # 1. Close original position

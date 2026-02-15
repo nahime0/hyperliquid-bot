@@ -20,7 +20,7 @@ from typing import Any
 import pandas as pd
 import ta as ta_lib
 
-from config.settings import MarketConfig, RiskConfig
+from config.settings import HyperliquidConfig, MarketConfig, RiskConfig
 from core.types import Decision
 from core.client import HyperliquidClient
 from data.db import Database
@@ -59,6 +59,7 @@ class RiskManager:
         market_config: MarketConfig | None = None,
         market_data: Any = None,
         ai_min_confidence: float = 0.5,
+        hl_config: HyperliquidConfig | None = None,
     ) -> None:
         self._config = config
         self._client = client
@@ -68,6 +69,8 @@ class RiskManager:
         self._market_config = market_config
         self._market_data = market_data
         self._ai_min_confidence = ai_min_confidence
+        self._hl_config = hl_config
+        self._funding_rates: dict[str, float] = {}
 
         # Runtime state
         self._peak_balance: float = 0.0
@@ -86,6 +89,10 @@ class RiskManager:
     def set_active_pairs(self, coins: list[str]) -> None:
         """Update the list of actively traded coins."""
         self._active_coins = coins
+
+    def set_funding_rates(self, rates: dict[str, float]) -> None:
+        """Update cached funding rates (called from tick after _refresh_funding)."""
+        self._funding_rates = rates
 
     def set_cycle(self, cycle: int) -> None:
         self._cycle_count = cycle
@@ -165,13 +172,29 @@ class RiskManager:
             # Daily tracking
             self._update_daily(balance)
 
-            # Check kill conditions
-            await self._check_kill_switch()
-            self._check_daily_pause()
+            # Note: kill switch + daily pause checks moved to refresh_balance_only()
+            # which runs every 2s in the SL/TP monitor (faster than tick loop)
 
             self._last_refresh = time.time()
         except Exception:
             logger.exception("RiskManager.refresh() failed")
+
+    async def refresh_balance_only(self) -> None:
+        """Lightweight refresh: balance + kill switch + daily pause only.
+
+        Called from SL/TP monitor every 2s. Does NOT enumerate HL positions
+        or check liquidation proximity (those stay in the full refresh()).
+        """
+        try:
+            balance = await self._client.get_account_balance()
+            self._current_balance = balance
+            if balance > self._peak_balance:
+                self._peak_balance = balance
+            self._update_daily(balance)
+            await self._check_kill_switch()
+            self._check_daily_pause()
+        except Exception:
+            logger.debug("refresh_balance_only failed", exc_info=True)
 
     # ── Validation ───────────────────────────────────────────
 
@@ -247,6 +270,22 @@ class RiskManager:
             if spread_block:
                 return spread_block
 
+        # ── Funding rate check (pre-entry) ──
+        if decision.action in ("BUY", "SHORT") and self._hl_config and decision.symbol:
+            funding = self._funding_rates.get(decision.symbol)
+            if funding is not None:
+                max_fr = self._hl_config.max_funding_rate
+                if decision.action == "BUY" and funding > max_fr:
+                    return await self._block(
+                        decision,
+                        f"Funding rate {funding:.6f} > max {max_fr} (longs crowded)",
+                    )
+                if decision.action == "SHORT" and funding < -max_fr:
+                    return await self._block(
+                        decision,
+                        f"Funding rate {funding:.6f} < -{max_fr} (shorts crowded)",
+                    )
+
         # ── Minimum balance ──
         if self._current_balance < self._config.min_balance_usdc:
             return await self._block(
@@ -260,11 +299,13 @@ class RiskManager:
 
         # ── Expected move gate ──
         if decision.action in ("BUY", "SHORT") and decision.expected_move_pct is not None:
-            min_move = self._config.trailing_breakeven_pct
+            min_move = self._config.trailing_breakeven_pct * self._config.min_expected_move_ratio
             if decision.expected_move_pct < min_move:
                 return await self._block(
                     decision,
-                    f"expected move {decision.expected_move_pct:.2f}% < trailing breakeven {min_move:.2f}%",
+                    f"Expected move {decision.expected_move_pct:.2f}% < min required "
+                    f"{min_move:.2f}% (breakeven {self._config.trailing_breakeven_pct}% x "
+                    f"ratio {self._config.min_expected_move_ratio})",
                 )
 
         # ── Step 1: Compute SL (before sizing) ──
