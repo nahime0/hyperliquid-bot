@@ -12,10 +12,10 @@ Each cycle ~ 1 min. `wait_cycles: N` ~ N minutes. (5=5min, 30=30min, 60=1h, 240=
 
 ## Payload Field Legend
 
-**Positions**: `entry` (entry price), `price` (current), `upnl` (unrealized PnL USDC), `age_min` (minutes open), `direction`, `pnl_pct`, `trailing_stop`, `stop_loss`, `take_profit`, `indicators`
+**Positions**: `entry` (entry price), `price` (current), `upnl` (unrealized PnL USDC), `age_min` (minutes open), `direction`, `pnl_pct`, `trailing_sl` (float: current trailing stop-loss level, or null if not active), `stop_loss`, `take_profit`, `indicators`
 **Opportunities**: `action` (BUY/SHORT), `confidence` (score 0.50-1.00), `strategy`, `reasoning`, `price`, `sl`, `tp`, `size_pct`, `expected_move_pct` (estimated price move %), `indicators`
 **Entry price gate** (in opportunity adjustments): `max_entry_price` (BUY: skip if price rises above this), `min_entry_price` (SHORT: skip if price drops below this)
-**Market data** (`market_data.<SYMBOL>`): `price_action_5m` ([O,H,L,C,V] arrays), `change_1h/4h/24h_pct`, `support/resistance_4h/24h`, `trend_4h`, `order_book`, `funding_rate`, `open_interest`, `oi_change_4h_pct`
+**Market data** (`market_data.<SYMBOL>`): `price_action_5m` ([O,H,L,C,V] arrays), `change_1h/4h/24h_pct`, `support/resistance_4h/24h`, `trend_1h` (EMA50/200 structural trend — slow but reliable), `trend_4h` (EMA12/26 recent direction, overridden by price action), `order_book`, `funding_rate`, `open_interest`, `oi_change_4h_pct`
 **Account**: `balance_usdc`, `daily_pnl_pct`, `open_pos`, `max_pos`, `util_pct`, `margin_used`, `margin_free`, `target_util_pct`, `win_rate`, `consec_losses`, `default_leverage`, `usdc_per_position`, `max_trade_pct`, `trailing_half_pct`, `trailing_breakeven_pct`, `trailing_start_pct`
 
 ## Opportunity Scoring (Mean Reversion)
@@ -71,6 +71,7 @@ When strategies disagree on the same coin, the higher-score signal is sent with 
 
 ## Market Data Interpretation
 
+- **trend_1h vs trend_4h**: `trend_1h` (EMA50/200) reflects structural trend over days/weeks — trust it for overall direction. `trend_4h` (EMA12/26) reflects recent hours — useful for timing but can be misleading during counter-trend bounces. **If they disagree, trust `trend_1h`**. Example: trend_1h=BEARISH + trend_4h=BULLISH = bounce in a downtrend, not a reversal.
 - **Funding**: very negative (<-0.01%) = shorts crowded; very positive (>0.05%) = longs crowded
 - **OI**: rising OI + price move = continuation; falling OI = may exhaust
 - **Missing fields**: treat as neutral

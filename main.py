@@ -1435,7 +1435,25 @@ class Bot:
             else:
                 trend_4h = "NEUTRAL"
 
+            # Override: real price action contradicts EMA signal
+            change_4h = ctx.get("change_4h_pct")
+            change_24h = ctx.get("change_24h_pct")
+            if trend_4h == "BULLISH" and change_4h is not None and change_4h < -2.0:
+                trend_4h = "NEUTRAL"
+            if trend_4h == "BEARISH" and change_4h is not None and change_4h > 2.0:
+                trend_4h = "NEUTRAL"
+            # Strong 24h override: unmistakable trend direction
+            if change_24h is not None and change_24h < -8.0:
+                trend_4h = "BEARISH"
+            if change_24h is not None and change_24h > 8.0:
+                trend_4h = "BULLISH"
+
             ctx["trend_4h"] = trend_4h
+
+        # ── Trend 1h: EMA50/EMA200 from TrendFilter (structural trend) ──
+        tf_state = self._trend_filter.get_state(symbol)
+        if tf_state:
+            ctx["trend_1h"] = tf_state["trend"]
 
         # ── Order book: top 3 bid/ask levels ──
         if order_books and symbol in order_books:
