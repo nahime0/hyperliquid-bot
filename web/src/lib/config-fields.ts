@@ -36,6 +36,8 @@ export const FIELD_LABELS: Record<string, FieldInfo> = {
   risk_min_holding_minutes: { label: "Min Holding Time", section: "Positions & Sizing" },
   risk_liquidation_buffer_pct: { label: "Liquidation Buffer", section: "Positions & Sizing" },
   risk_min_rr_ratio: { label: "Min R:R Ratio", section: "Positions & Sizing" },
+  risk_min_expected_move_ratio: { label: "Min Expected Move Ratio", section: "SL & TP" },
+  risk_slippage_estimate: { label: "Slippage Estimate", section: "SL & TP" },
   // Risk: Stop Loss & Take Profit
   risk_stop_loss_pct: { label: "Default Stop Loss", section: "SL & TP" },
   risk_take_profit_pct: { label: "Default Take Profit", section: "SL & TP" },

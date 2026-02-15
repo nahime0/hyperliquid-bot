@@ -239,6 +239,8 @@ export interface BotConfig {
   risk_atr_trailing_tight_multiplier: number;
   risk_atr_trailing_min_pct: number;
   risk_atr_trailing_max_pct: number;
+  risk_min_expected_move_ratio: number;
+  risk_slippage_estimate: number;
   // market_
   market_min_pair_volume: number;
   market_max_coins: number;
