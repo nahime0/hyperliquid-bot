@@ -21,8 +21,8 @@ def _bool(val: str | None, default: bool = False) -> bool:
 class HyperliquidConfig:
     private_key: str = ""
     account_address: str = ""
-    testnet: bool = True
-    default_leverage: int = 2
+    testnet: bool = False
+    default_leverage: int = 3
     margin_mode: str = "cross"
     max_funding_rate: float = 0.0005
 
@@ -35,12 +35,12 @@ class HyperliquidConfig:
 
 @dataclass(frozen=True)
 class AIConfig:
-    advisor: str = "claude"  # "claude" or "cursor"
+    advisor: str = "cursor"  # "claude" or "cursor"
     decision_interval: int = 60
-    min_confidence: float = 0.6
+    min_confidence: float = 0.7
     fallback_on_error: str = "HOLD"
     log_reasoning: bool = True
-    model: str = "opus"
+    model: str = "gemini-3-flash"
     timeout: int = 180
 
 
@@ -52,13 +52,13 @@ class RiskConfig:
     auto_take_profit: bool = False  # False → no auto-TP, rely on trailing stop
     max_daily_drawdown_pct: float = 5.0
     max_total_drawdown_pct: float = 15.0
-    max_open_positions: int = 15        # hard cap (or static value if dynamic disabled)
+    max_open_positions: int = 3          # hard cap (or static value if dynamic disabled)
     dynamic_positions: bool = True      # scale max positions with balance
-    usdc_per_position: float = 25.0    # 1 position slot per N USDC (100 USDC → 4 slots)
+    usdc_per_position: float = 40.0    # 1 position slot per N USDC (100 USDC → 2-3 slots)
     # Capital utilization
     target_utilization: float = 0.50    # target 50% balance as margin
     max_size_boost: float = 2.5         # max multiplier on base sizing
-    min_balance_usdc: float = 50.0
+    min_balance_usdc: float = 20.0
     min_holding_minutes: int = 15  # minimum time before AI can close a position
     max_leverage: int = 3
     liquidation_buffer_pct: float = 5.0
@@ -66,11 +66,11 @@ class RiskConfig:
     sl_tp_grace_seconds: int = 30
     # Trailing stop
     trailing_half_pct: float = 0.5        # move SL to midpoint (entry+SL)/2 after +X%
-    trailing_breakeven_pct: float = 0.5   # move SL to entry after +X%
-    trailing_start_pct: float = 1.5       # start trailing after +X%
-    trailing_distance_pct: float = 1.0    # trail at max_price - X%
-    trailing_tight_pct: float = 2.5       # tighten trail after +X%
-    trailing_tight_distance_pct: float = 0.75  # tight trail distance
+    trailing_breakeven_pct: float = 1.0   # move SL to entry after +X%
+    trailing_start_pct: float = 1.2       # start trailing after +X%
+    trailing_distance_pct: float = 0.8    # trail at max_price - X%
+    trailing_tight_pct: float = 2.0       # tighten trail after +X%
+    trailing_tight_distance_pct: float = 0.4   # tight trail distance
     # Time stop
     time_stop_hours: float = 4.0          # close positions older than X hours
     time_stop_min_pnl_pct: float = 0.5    # only if PnL < X%
@@ -82,7 +82,7 @@ class RiskConfig:
     use_atr_sl: bool = True               # use ATR to compute per-coin stop loss
     atr_sl_multiplier: float = 2.5        # SL = price +/- (multiplier * ATR)
     atr_sl_min_pct: float = 0.8           # floor: never tighter than 0.8%
-    atr_sl_max_pct: float = 3.0           # ceiling: never wider than 3.0%
+    atr_sl_max_pct: float = 1.5           # ceiling: never wider than 1.5%
     # Risk-based position sizing
     risk_per_trade_pct: float = 1.0       # max % of bankroll to risk per trade
     # Partial take profit
@@ -120,8 +120,8 @@ class StrategyConfig:
     tf_allow_short: bool = False       # disable SHORT on trend_following (0% WR)
     tf_change_threshold: float = 4.0  # % price change over 4h to fire trend signal
     rsi_div_swing_window: int = 5       # wider window to catch more divergences (was 4)
-    rsi_div_long_exit: float = 65.0     # widened from 55 to avoid premature exit (5m RSI volatile)
-    rsi_div_short_exit: float = 25.0    # widened from 35 to avoid premature exit (5m RSI volatile)
+    rsi_div_long_exit: float = 55.0     # exit long when RSI exceeds this
+    rsi_div_short_exit: float = 35.0    # exit short when RSI drops below this
     min_candle_volume_usdc: float = 10_000.0  # skip coins with candle volume below this
     primary_interval: str = "5m"      # RSI Div uses 5m
     mr_interval: str = "15m"          # Mean Reversion uses 15m
@@ -199,18 +199,18 @@ def load_settings() -> Settings:
         hyperliquid=HyperliquidConfig(
             private_key=os.getenv("HL_PRIVATE_KEY", ""),
             account_address=os.getenv("HL_ACCOUNT_ADDRESS", ""),
-            testnet=_bool(os.getenv("HL_TESTNET"), default=True),
-            default_leverage=int(os.getenv("HL_DEFAULT_LEVERAGE", "2")),
+            testnet=_bool(os.getenv("HL_TESTNET"), default=False),
+            default_leverage=int(os.getenv("HL_DEFAULT_LEVERAGE", "3")),
             margin_mode=os.getenv("HL_MARGIN_MODE", "cross"),
             max_funding_rate=float(os.getenv("HL_MAX_FUNDING_RATE", "0.0005")),
         ),
         ai=AIConfig(
-            advisor=os.getenv("AI_ADVISOR", "claude"),
+            advisor=os.getenv("AI_ADVISOR", "cursor"),
             decision_interval=int(os.getenv("AI_DECISION_INTERVAL", "60")),
-            min_confidence=float(os.getenv("AI_MIN_CONFIDENCE", "0.6")),
+            min_confidence=float(os.getenv("AI_MIN_CONFIDENCE", "0.7")),
             fallback_on_error=os.getenv("AI_FALLBACK_ON_ERROR", "HOLD"),
             log_reasoning=_bool(os.getenv("AI_LOG_REASONING"), default=True),
-            model=os.getenv("AI_MODEL", "opus"),
+            model=os.getenv("AI_MODEL", "gemini-3-flash"),
             timeout=int(os.getenv("AI_TIMEOUT", "180")),
         ),
         risk=RiskConfig(
@@ -220,17 +220,17 @@ def load_settings() -> Settings:
             auto_take_profit=_bool(os.getenv("AUTO_TAKE_PROFIT"), default=False),
             max_daily_drawdown_pct=float(os.getenv("MAX_DAILY_DRAWDOWN_PCT", "5.0")),
             max_total_drawdown_pct=float(os.getenv("MAX_TOTAL_DRAWDOWN_PCT", "15.0")),
-            max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "15")),
+            max_open_positions=int(os.getenv("MAX_OPEN_POSITIONS", "3")),
             dynamic_positions=_bool(os.getenv("DYNAMIC_POSITIONS"), default=True),
-            usdc_per_position=float(os.getenv("USDC_PER_POSITION", "25.0")),
-            min_balance_usdc=float(os.getenv("MIN_BALANCE_USDC", "50.0")),
+            usdc_per_position=float(os.getenv("USDC_PER_POSITION", "40.0")),
+            min_balance_usdc=float(os.getenv("MIN_BALANCE_USDC", "20.0")),
             min_holding_minutes=int(os.getenv("MIN_HOLDING_MINUTES", "15")),
             trailing_half_pct=float(os.getenv("TRAILING_HALF_PCT", "0.5")),
-            trailing_breakeven_pct=float(os.getenv("TRAILING_BREAKEVEN_PCT", "0.5")),
-            trailing_start_pct=float(os.getenv("TRAILING_START_PCT", "1.5")),
-            trailing_distance_pct=float(os.getenv("TRAILING_DISTANCE_PCT", "1.0")),
-            trailing_tight_pct=float(os.getenv("TRAILING_TIGHT_PCT", "2.5")),
-            trailing_tight_distance_pct=float(os.getenv("TRAILING_TIGHT_DISTANCE_PCT", "0.75")),
+            trailing_breakeven_pct=float(os.getenv("TRAILING_BREAKEVEN_PCT", "1.0")),
+            trailing_start_pct=float(os.getenv("TRAILING_START_PCT", "1.2")),
+            trailing_distance_pct=float(os.getenv("TRAILING_DISTANCE_PCT", "0.8")),
+            trailing_tight_pct=float(os.getenv("TRAILING_TIGHT_PCT", "2.0")),
+            trailing_tight_distance_pct=float(os.getenv("TRAILING_TIGHT_DISTANCE_PCT", "0.4")),
             time_stop_hours=float(os.getenv("TIME_STOP_HOURS", "4.0")),
             time_stop_min_pnl_pct=float(os.getenv("TIME_STOP_MIN_PNL_PCT", "0.5")),
             target_utilization=float(os.getenv("TARGET_UTILIZATION", "0.50")),
@@ -241,7 +241,7 @@ def load_settings() -> Settings:
             use_atr_sl=_bool(os.getenv("USE_ATR_SL"), default=True),
             atr_sl_multiplier=float(os.getenv("ATR_SL_MULTIPLIER", "2.5")),
             atr_sl_min_pct=float(os.getenv("ATR_SL_MIN_PCT", "0.8")),
-            atr_sl_max_pct=float(os.getenv("ATR_SL_MAX_PCT", "3.0")),
+            atr_sl_max_pct=float(os.getenv("ATR_SL_MAX_PCT", "1.5")),
             risk_per_trade_pct=float(os.getenv("RISK_PER_TRADE_PCT", "1.0")),
             partial_tp_enabled=_bool(os.getenv("PARTIAL_TP_ENABLED"), default=False),
             partial_tp_pct=float(os.getenv("PARTIAL_TP_PCT", "50.0")),
@@ -273,8 +273,8 @@ def load_settings() -> Settings:
             ),
             rsi_div_period=int(os.getenv("RSI_DIV_PERIOD", "14")),
             rsi_div_swing_window=int(os.getenv("RSI_DIV_SWING_WINDOW", "5")),
-            rsi_div_long_exit=float(os.getenv("RSI_DIV_LONG_EXIT", "65.0")),
-            rsi_div_short_exit=float(os.getenv("RSI_DIV_SHORT_EXIT", "25.0")),
+            rsi_div_long_exit=float(os.getenv("RSI_DIV_LONG_EXIT", "55.0")),
+            rsi_div_short_exit=float(os.getenv("RSI_DIV_SHORT_EXIT", "35.0")),
             min_candle_volume_usdc=float(os.getenv("MIN_CANDLE_VOLUME_USDC", "10000")),
             primary_interval=os.getenv("PRIMARY_INTERVAL", "5m"),
             mr_interval=os.getenv("MR_INTERVAL", "15m"),

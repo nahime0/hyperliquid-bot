@@ -53,20 +53,22 @@ class TestTrailingWithAccuratePrices:
         assert pos["trailing_sl"] is None or pos["trailing_sl"] <= 0.1520
 
     @pytest.mark.asyncio
-    async def test_trailing_breakeven_at_half_pct(self, tracker):
-        """LONG: price rises 0.5% → trailing moves to breakeven (entry)."""
+    async def test_trailing_half_at_half_pct(self, tracker):
+        """LONG: price rises 0.5% → trailing moves SL to midpoint (half)."""
         entry = 0.15358
         sl = 0.1520
         await tracker.open_position(
             symbol="ME", entry_price=entry, quantity=130.0,
             stop_loss=sl, direction="LONG",
         )
-        # +0.5% = 0.15435 — hits breakeven threshold (0.5%)
+        # +0.5% = 0.15435 — hits half threshold (0.5%)
         await tracker.check_sl_tp({"ME": 0.15435})
         pos = await tracker.get_position_for_symbol("ME")
         assert pos["max_price_seen"] == pytest.approx(0.15435, rel=1e-4)
         trail = pos.get("trailing_sl") or pos.get("stop_loss")
-        assert trail == pytest.approx(entry, rel=1e-4)
+        # half_pct moves SL to midpoint between entry and original SL
+        midpoint = (entry + sl) / 2
+        assert trail == pytest.approx(midpoint, rel=1e-3)
 
     @pytest.mark.asyncio
     async def test_trailing_no_update_below_half(self, tracker):
@@ -83,29 +85,29 @@ class TestTrailingWithAccuratePrices:
 
     @pytest.mark.asyncio
     async def test_trailing_breakeven_at_1pct(self, tracker):
-        """LONG: price rises 1.2% → trailing moves to entry (breakeven)."""
+        """LONG: price rises 1.1% → trailing moves to entry (breakeven, breakeven_pct=1.0%)."""
         entry = 0.15358
         await tracker.open_position(
             symbol="ME", entry_price=entry, quantity=130.0,
             stop_loss=0.1520, direction="LONG",
         )
-        price = entry * 1.012  # +1.2%
+        price = entry * 1.011  # +1.1%
         await tracker.check_sl_tp({"ME": price})
         pos = await tracker.get_position_for_symbol("ME")
         trail = pos.get("trailing_sl")
         assert trail is not None
-        assert trail >= entry  # At least breakeven
+        assert trail == pytest.approx(entry, rel=1e-3)
 
     @pytest.mark.asyncio
-    async def test_trailing_normal_at_1_5pct(self, tracker):
-        """LONG: price rises 1.8% → trailing starts (max * (1 - distance%))."""
+    async def test_trailing_normal_at_start_pct(self, tracker):
+        """LONG: price rises 1.5% → trailing starts (max * (1 - distance%)), start_pct=1.2%."""
         entry = 0.15358
         rc = RiskConfig()
         await tracker.open_position(
             symbol="ME", entry_price=entry, quantity=130.0,
             stop_loss=0.1520, direction="LONG",
         )
-        price = entry * 1.018  # +1.8%
+        price = entry * 1.015  # +1.5%
         await tracker.check_sl_tp({"ME": price})
         pos = await tracker.get_position_for_symbol("ME")
         trail = pos.get("trailing_sl")
@@ -114,7 +116,7 @@ class TestTrailingWithAccuratePrices:
 
     @pytest.mark.asyncio
     async def test_trailing_tight_at_3pct(self, tracker):
-        """LONG: price rises 3% → tight trailing (max * (1 - tight_distance%))."""
+        """LONG: price rises 3% → tight trailing (max * (1 - tight_distance%)), tight_pct=2.0%."""
         entry = 0.15358
         rc = RiskConfig()
         await tracker.open_position(
@@ -157,21 +159,21 @@ class TestTrailingWithAccuratePrices:
             symbol="ETH", entry_price=entry, quantity=0.5,
             stop_loss=1960, direction="LONG",
         )
-        # Step 1: +1.2% → breakeven
-        await tracker.check_sl_tp({"ETH": 2024})
+        # Step 1: +1.1% → breakeven (breakeven_pct=1.0%)
+        await tracker.check_sl_tp({"ETH": 2022})
         pos = await tracker.get_position_for_symbol("ETH")
         trail1 = pos.get("trailing_sl")
-        assert trail1 >= entry
+        assert trail1 == pytest.approx(entry, rel=1e-3)
 
-        # Step 2: +2.0% → normal trailing
-        await tracker.check_sl_tp({"ETH": 2040})
+        # Step 2: +1.5% → normal trailing (start_pct=1.2%)
+        await tracker.check_sl_tp({"ETH": 2030})
         pos = await tracker.get_position_for_symbol("ETH")
         trail2 = pos.get("trailing_sl")
-        expected2 = 2040 * (1 - rc.trailing_distance_pct / 100)
+        expected2 = 2030 * (1 - rc.trailing_distance_pct / 100)
         assert trail2 == pytest.approx(expected2, rel=1e-4)
         assert trail2 > trail1
 
-        # Step 3: +3.0% → tight trailing
+        # Step 3: +3.0% → tight trailing (tight_pct=2.0%)
         await tracker.check_sl_tp({"ETH": 2060})
         pos = await tracker.get_position_for_symbol("ETH")
         trail3 = pos.get("trailing_sl")

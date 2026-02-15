@@ -19,7 +19,7 @@ export function getWriteDb(): Database.Database {
   if (!_dbWrite) {
     _dbWrite = new Database(DB_PATH, { fileMustExist: true });
     _dbWrite.pragma("journal_mode = WAL");
-    _dbWrite.pragma("busy_timeout = 5000");
+    _dbWrite.pragma("busy_timeout = 30000");
   }
   return _dbWrite;
 }

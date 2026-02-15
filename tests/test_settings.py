@@ -7,11 +7,11 @@ from config.settings import AIConfig, MarketConfig, RiskConfig, Settings, Strate
 class TestAIConfig:
     def test_defaults(self):
         c = AIConfig()
-        assert c.advisor == "claude"
-        assert c.model == "opus"
+        assert c.advisor == "cursor"
+        assert c.model == "gemini-3-flash"
         assert c.timeout == 180
         assert c.decision_interval == 60
-        assert c.min_confidence == 0.6
+        assert c.min_confidence == 0.7
         assert c.fallback_on_error == "HOLD"
 
     def test_no_anthropic_fields(self):
@@ -34,24 +34,24 @@ class TestRiskConfig:
         assert c.take_profit_pct == 1.5
         assert c.max_daily_drawdown_pct == 5.0
         assert c.max_total_drawdown_pct == 15.0
-        assert c.max_open_positions == 15
-        assert c.min_balance_usdc == 50.0
+        assert c.max_open_positions == 3
+        assert c.min_balance_usdc == 20.0
         assert c.auto_take_profit is False
         assert c.dynamic_positions is True
-        assert c.usdc_per_position == 25.0
+        assert c.usdc_per_position == 40.0
         assert c.target_utilization == 0.50
         assert c.max_size_boost == 2.5
-        assert c.trailing_breakeven_pct == 0.5
-        assert c.trailing_start_pct == 1.5
-        assert c.trailing_distance_pct == 1.0
-        assert c.trailing_tight_pct == 2.5
-        assert c.trailing_tight_distance_pct == 0.75
+        assert c.trailing_breakeven_pct == 1.0
+        assert c.trailing_start_pct == 1.2
+        assert c.trailing_distance_pct == 0.8
+        assert c.trailing_tight_pct == 2.0
+        assert c.trailing_tight_distance_pct == 0.4
         assert c.time_stop_hours == 4.0
         # ATR-based stop loss
         assert c.use_atr_sl is True
         assert c.atr_sl_multiplier == 2.5
         assert c.atr_sl_min_pct == 0.8
-        assert c.atr_sl_max_pct == 3.0
+        assert c.atr_sl_max_pct == 1.5
         # Risk-based sizing
         assert c.risk_per_trade_pct == 1.0
         # Partial TP
@@ -94,6 +94,8 @@ class TestStrategyConfig:
         assert c.min_candle_volume_usdc == 10_000.0
         assert c.primary_interval == "5m"
         assert c.mr_interval == "15m"
+        assert c.rsi_div_long_exit == 55.0
+        assert c.rsi_div_short_exit == 35.0
 
     def test_frozen(self):
         c = StrategyConfig()

@@ -133,7 +133,7 @@ class TestValidation:
     @pytest.mark.asyncio
     async def test_validate_min_balance_blocks(self, risk_env):
         rm, pt, _ = risk_env
-        rm._current_balance = 30.0  # below 50
+        rm._current_balance = 15.0  # below min_balance_usdc (20)
         d = Decision(action="BUY", confidence=0.8, reasoning="sig", symbol="ETH")
         result = await rm.validate_decision(d)
         assert result.approved is False
@@ -863,10 +863,10 @@ class TestKellyFloor:
         # Floor should be 40 USDC (usdc_per_position), not 10 (MIN_ORDER_USDC)
         assert result.size_usdc == pytest.approx(40.0, abs=0.01)
 
-    def test_kelly_floor_default_25(self):
-        """Default usdc_per_position=25 → floor at $25."""
+    def test_kelly_floor_default_40(self):
+        """Default usdc_per_position=40 → floor at $40."""
         from risk.position_sizer import PositionSizer
-        rc = RiskConfig(max_trade_pct=15.0)  # default usdc_per_position=25
+        rc = RiskConfig(max_trade_pct=15.0)  # default usdc_per_position=40
         sizer = PositionSizer(rc)
         stats = {
             "total_trades": 50,
@@ -875,7 +875,7 @@ class TestKellyFloor:
             "avg_loss": 5.0,
         }
         result = sizer.compute(1000, stats, 0.7)
-        assert result.size_usdc == pytest.approx(25.0, abs=0.01)
+        assert result.size_usdc == pytest.approx(40.0, abs=0.01)
 
     def test_kelly_floor_min_order_usdc_when_per_position_low(self):
         """If usdc_per_position < MIN_ORDER_USDC, floor is MIN_ORDER_USDC."""

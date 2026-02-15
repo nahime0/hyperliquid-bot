@@ -401,12 +401,12 @@ class TestTrailingAfterPartialClose:
             symbol="ETH", entry_price=2000, quantity=0.5,
             stop_loss=1960, take_profit=2200, direction="LONG",
         )
-        # Price at +0.8% — above breakeven_pct (0.5%) but below start_pct
-        await position_tracker.check_sl_tp({"ETH": 2016})
+        # Price at +1.1% — above breakeven_pct (1.0%) but below start_pct (1.2%)
+        await position_tracker.check_sl_tp({"ETH": 2022})
         pos = await position_tracker.get_position_for_symbol("ETH")
 
         trailing = pos.get("trailing_sl")
-        # 0.8% >= breakeven_pct(0.5%) → SL at entry (breakeven)
+        # 1.1% >= breakeven_pct(1.0%) → SL at entry (breakeven)
         assert trailing == pytest.approx(2000, rel=1e-4)
 
 

@@ -10,6 +10,8 @@ import type {
   AiDecision,
   Order,
   DeferredOpportunity,
+  BotConfig,
+  ConfigHistoryEntry,
 } from "./types";
 
 // ── Positions ──────────────────────────────────────────────
@@ -287,6 +289,87 @@ export function getAllBotState(): Record<string, string> {
     result[row.key] = row.value;
   }
   return result;
+}
+
+// ── Bot Config ────────────────────────────────────────
+
+export function getConfig(): BotConfig {
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM bot_config WHERE id = 1").get() as (BotConfig & { id: number }) | undefined;
+  if (!row) throw new Error("bot_config row missing — run the bot once to create the schema");
+  const { id: _id, ...config } = row;
+  return config;
+}
+
+export function updateConfig(changes: Record<string, unknown>): { changed: Record<string, { old: string; new: string }> } {
+  const db = getWriteDb();
+  const current = db.prepare("SELECT * FROM bot_config WHERE id = 1").get() as Record<string, unknown>;
+  if (!current) throw new Error("bot_config row missing");
+
+  const now = new Date().toISOString().replace(/\.\d+Z$/, "Z");
+  const changed: Record<string, { old: string; new: string }> = {};
+
+  const insertHistory = db.prepare(
+    "INSERT INTO config_history (timestamp, field_name, old_value, new_value, source) VALUES (?, ?, ?, ?, ?)"
+  );
+
+  const validFields = Object.keys(current).filter(k => k !== "id" && k !== "updated_at");
+  const setClauses: string[] = [];
+  const values: unknown[] = [];
+
+  for (const [field, newVal] of Object.entries(changes)) {
+    if (!validFields.includes(field)) continue;
+    const oldStr = String(current[field] ?? "");
+    const newStr = String(newVal);
+    if (oldStr !== newStr) {
+      changed[field] = { old: oldStr, new: newStr };
+      setClauses.push(`${field} = ?`);
+      values.push(newVal);
+    }
+  }
+
+  if (setClauses.length > 0) {
+    const txn = db.transaction(() => {
+      for (const [field, diff] of Object.entries(changed)) {
+        insertHistory.run(now, field, diff.old, diff.new, "dashboard");
+      }
+      setClauses.push("updated_at = ?");
+      values.push(now);
+      db.prepare(`UPDATE bot_config SET ${setClauses.join(", ")} WHERE id = 1`).run(...values);
+    });
+    txn();
+  }
+
+  return { changed };
+}
+
+export function getConfigHistory(params: {
+  limit?: number;
+  offset?: number;
+  field_name?: string;
+}): ConfigHistoryEntry[] {
+  const { limit = 100, offset = 0, field_name } = params;
+  if (field_name) {
+    return getDb()
+      .prepare("SELECT * FROM config_history WHERE field_name = ? ORDER BY id DESC LIMIT ? OFFSET ?")
+      .all(field_name, limit, offset) as ConfigHistoryEntry[];
+  }
+  return getDb()
+    .prepare("SELECT * FROM config_history ORDER BY id DESC LIMIT ? OFFSET ?")
+    .all(limit, offset) as ConfigHistoryEntry[];
+}
+
+export function getConfigHistoryCount(field_name?: string): number {
+  if (field_name) {
+    const row = getDb()
+      .prepare("SELECT COUNT(*) as cnt FROM config_history WHERE field_name = ?")
+      .get(field_name) as { cnt: number };
+    return row.cnt;
+  }
+  const row = getDb()
+    .prepare("SELECT COUNT(*) as cnt FROM config_history")
+    .get() as { cnt: number };
+  return row.cnt;
 }
 
 // ── Aggregate stats ────────────────────────────────────────

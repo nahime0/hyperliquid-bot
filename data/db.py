@@ -158,6 +158,167 @@ CREATE TABLE IF NOT EXISTS bot_state (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
+
+CREATE TABLE IF NOT EXISTS bot_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+
+    -- main_ : General settings
+    main_log_level TEXT NOT NULL DEFAULT 'INFO',
+    main_db_path TEXT NOT NULL DEFAULT 'data/trading_bot.db',
+
+    -- hl_ : Hyperliquid connection
+    hl_testnet INTEGER NOT NULL DEFAULT 1,
+    hl_default_leverage INTEGER NOT NULL DEFAULT 2,
+    hl_margin_mode TEXT NOT NULL DEFAULT 'cross',
+    hl_max_funding_rate REAL NOT NULL DEFAULT 0.0005,
+
+    -- ai_ : AI advisor
+    ai_advisor TEXT NOT NULL DEFAULT 'claude',
+    ai_decision_interval INTEGER NOT NULL DEFAULT 60,
+    ai_min_confidence REAL NOT NULL DEFAULT 0.6,
+    ai_fallback_on_error TEXT NOT NULL DEFAULT 'HOLD',
+    ai_log_reasoning INTEGER NOT NULL DEFAULT 1,
+    ai_model TEXT NOT NULL DEFAULT 'opus',
+    ai_timeout INTEGER NOT NULL DEFAULT 180,
+
+    -- risk_ : Risk management
+    risk_max_trade_pct REAL NOT NULL DEFAULT 15.0,
+    risk_stop_loss_pct REAL NOT NULL DEFAULT 2.0,
+    risk_take_profit_pct REAL NOT NULL DEFAULT 1.5,
+    risk_auto_take_profit INTEGER NOT NULL DEFAULT 0,
+    risk_max_daily_drawdown_pct REAL NOT NULL DEFAULT 5.0,
+    risk_max_total_drawdown_pct REAL NOT NULL DEFAULT 15.0,
+    risk_max_open_positions INTEGER NOT NULL DEFAULT 15,
+    risk_dynamic_positions INTEGER NOT NULL DEFAULT 1,
+    risk_usdc_per_position REAL NOT NULL DEFAULT 25.0,
+    risk_target_utilization REAL NOT NULL DEFAULT 0.50,
+    risk_max_size_boost REAL NOT NULL DEFAULT 2.5,
+    risk_min_balance_usdc REAL NOT NULL DEFAULT 50.0,
+    risk_min_holding_minutes INTEGER NOT NULL DEFAULT 15,
+    risk_max_leverage INTEGER NOT NULL DEFAULT 3,
+    risk_liquidation_buffer_pct REAL NOT NULL DEFAULT 5.0,
+    risk_sl_tp_grace_seconds INTEGER NOT NULL DEFAULT 30,
+    risk_trailing_half_pct REAL NOT NULL DEFAULT 0.5,
+    risk_trailing_breakeven_pct REAL NOT NULL DEFAULT 0.5,
+    risk_trailing_start_pct REAL NOT NULL DEFAULT 1.5,
+    risk_trailing_distance_pct REAL NOT NULL DEFAULT 1.0,
+    risk_trailing_tight_pct REAL NOT NULL DEFAULT 2.5,
+    risk_trailing_tight_distance_pct REAL NOT NULL DEFAULT 0.75,
+    risk_time_stop_hours REAL NOT NULL DEFAULT 4.0,
+    risk_time_stop_min_pnl_pct REAL NOT NULL DEFAULT 0.5,
+    risk_symbol_cooldown_sec INTEGER NOT NULL DEFAULT 1800,
+    risk_global_cooldown_sec INTEGER NOT NULL DEFAULT 900,
+    risk_global_cooldown_losses INTEGER NOT NULL DEFAULT 3,
+    risk_use_atr_sl INTEGER NOT NULL DEFAULT 1,
+    risk_atr_sl_multiplier REAL NOT NULL DEFAULT 2.5,
+    risk_atr_sl_min_pct REAL NOT NULL DEFAULT 0.8,
+    risk_atr_sl_max_pct REAL NOT NULL DEFAULT 3.0,
+    risk_risk_per_trade_pct REAL NOT NULL DEFAULT 1.0,
+    risk_partial_tp_enabled INTEGER NOT NULL DEFAULT 0,
+    risk_partial_tp_pct REAL NOT NULL DEFAULT 50.0,
+    risk_partial_tp_trigger_pct REAL NOT NULL DEFAULT 2.0,
+    risk_min_rr_ratio REAL NOT NULL DEFAULT 1.5,
+    risk_use_atr_trailing INTEGER NOT NULL DEFAULT 1,
+    risk_atr_trailing_multiplier REAL NOT NULL DEFAULT 1.5,
+    risk_atr_trailing_tight_multiplier REAL NOT NULL DEFAULT 1.0,
+    risk_atr_trailing_min_pct REAL NOT NULL DEFAULT 0.5,
+    risk_atr_trailing_max_pct REAL NOT NULL DEFAULT 2.0,
+
+    -- market_ : Market/discovery
+    market_min_pair_volume REAL NOT NULL DEFAULT 50000.0,
+    market_max_coins INTEGER NOT NULL DEFAULT 60,
+    market_max_spread_pct REAL NOT NULL DEFAULT 0.5,
+    market_coin_blacklist TEXT NOT NULL DEFAULT 'AXS,MOODENG,CC,HYPE',
+
+    -- strat_ : Strategy general
+    strat_active_strategies TEXT NOT NULL DEFAULT 'mean_reversion,rsi_divergence,trend_following,bb_squeeze,breakout,btc_correlation,buy_the_dip,ema_crossover,funding_rate,macd_divergence,mtf_confluence,session_momentum,volume_spike',
+    strat_min_candle_volume_usdc REAL NOT NULL DEFAULT 10000.0,
+    strat_primary_interval TEXT NOT NULL DEFAULT '5m',
+    strat_mr_interval TEXT NOT NULL DEFAULT '15m',
+    strat_trend_interval TEXT NOT NULL DEFAULT '1h',
+
+    -- mr_ : Mean Reversion
+    -- (no specific settings beyond shared ones)
+
+    -- rsidiv_ : RSI Divergence
+    rsidiv_period INTEGER NOT NULL DEFAULT 14,
+    rsidiv_swing_window INTEGER NOT NULL DEFAULT 5,
+    rsidiv_long_exit REAL NOT NULL DEFAULT 65.0,
+    rsidiv_short_exit REAL NOT NULL DEFAULT 25.0,
+
+    -- tf_ : Trend Following
+    tf_allow_short INTEGER NOT NULL DEFAULT 0,
+    tf_change_threshold REAL NOT NULL DEFAULT 4.0,
+
+    -- btd_ : Buy the Dip
+    btd_dip_min_pct REAL NOT NULL DEFAULT 0.5,
+    btd_dip_max_pct REAL NOT NULL DEFAULT 3.0,
+    btd_volume_spike REAL NOT NULL DEFAULT 1.5,
+
+    -- ema_ : EMA Crossover
+    ema_cross_fast INTEGER NOT NULL DEFAULT 9,
+    ema_cross_slow INTEGER NOT NULL DEFAULT 21,
+    ema_cross_max_bars INTEGER NOT NULL DEFAULT 2,
+
+    -- bbs_ : BB Squeeze
+    bbs_squeeze_percentile REAL NOT NULL DEFAULT 20.0,
+    bbs_lookback_bars INTEGER NOT NULL DEFAULT 100,
+    bbs_min_volume_spike REAL NOT NULL DEFAULT 1.5,
+
+    -- macd_ : MACD Divergence
+    macd_div_swing_window INTEGER NOT NULL DEFAULT 5,
+    macd_div_recency INTEGER NOT NULL DEFAULT 40,
+
+    -- vs_ : Volume Spike Reversal
+    vs_spike_threshold REAL NOT NULL DEFAULT 3.0,
+    vs_wick_ratio REAL NOT NULL DEFAULT 2.0,
+
+    -- bo_ : Support/Resistance Breakout
+    bo_lookback_hours INTEGER NOT NULL DEFAULT 24,
+    bo_min_breakout_pct REAL NOT NULL DEFAULT 0.1,
+    bo_confirm_bars INTEGER NOT NULL DEFAULT 2,
+
+    -- fr_ : Funding Rate Contrarian
+    fr_extreme_negative REAL NOT NULL DEFAULT -0.0005,
+    fr_extreme_positive REAL NOT NULL DEFAULT 0.0005,
+    fr_normalize_threshold REAL NOT NULL DEFAULT 0.0001,
+
+    -- btc_ : BTC Correlation Lag
+    btc_min_move_pct REAL NOT NULL DEFAULT 1.0,
+    btc_min_lag_pct REAL NOT NULL DEFAULT 0.5,
+    btc_catch_up_pct REAL NOT NULL DEFAULT 0.2,
+
+    -- sm_ : Session Momentum
+    sm_min_session_change REAL NOT NULL DEFAULT 0.5,
+    sm_entry_window_hours INTEGER NOT NULL DEFAULT 2,
+    sm_exit_hours REAL NOT NULL DEFAULT 4.0,
+
+    -- mtf_ : Multi-Timeframe Confluence
+    mtf_rsi_oversold REAL NOT NULL DEFAULT 35.0,
+    mtf_rsi_overbought REAL NOT NULL DEFAULT 65.0,
+    mtf_rsi_slope_bars INTEGER NOT NULL DEFAULT 3,
+
+    -- telegram_ : Notifications
+    telegram_bot_token TEXT NOT NULL DEFAULT '',
+    telegram_chat_id TEXT NOT NULL DEFAULT '',
+
+    updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+-- Seed the single config row if it doesn't exist
+INSERT OR IGNORE INTO bot_config (id) VALUES (1);
+
+CREATE TABLE IF NOT EXISTS config_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+    field_name TEXT NOT NULL,
+    old_value TEXT,
+    new_value TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'dashboard'
+);
+
+CREATE INDEX IF NOT EXISTS idx_config_history_timestamp ON config_history(timestamp);
+CREATE INDEX IF NOT EXISTS idx_config_history_field ON config_history(field_name);
 """
 
 _MIGRATIONS = [
@@ -597,6 +758,92 @@ class Database:
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    # ── Bot Config ─────────────────────────────────────────
+
+    async def get_config(self) -> dict[str, Any]:
+        """Get the single bot_config row as a dict."""
+        cursor = await self.db.execute("SELECT * FROM bot_config WHERE id = 1")
+        row = await cursor.fetchone()
+        if row is None:
+            # Seed default row
+            await self.db.execute("INSERT OR IGNORE INTO bot_config (id) VALUES (1)")
+            await self.db.commit()
+            cursor = await self.db.execute("SELECT * FROM bot_config WHERE id = 1")
+            row = await cursor.fetchone()
+        result = dict(row)
+        result.pop("id", None)
+        return result
+
+    async def update_config(
+        self,
+        changes: dict[str, Any],
+        source: str = "dashboard",
+    ) -> dict[str, str]:
+        """Update config fields and log changes to config_history.
+        Returns dict of {field: old_value} for fields that actually changed.
+        """
+        current = await self.get_config()
+        now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        changed: dict[str, str] = {}
+
+        for field, new_val in changes.items():
+            if field in ("id", "updated_at"):
+                continue
+            if field not in current:
+                continue
+            old_val = current[field]
+            old_str = str(old_val) if old_val is not None else ""
+            new_str = str(new_val)
+            if old_str != new_str:
+                changed[field] = old_str
+                await self.db.execute(
+                    "INSERT INTO config_history (timestamp, field_name, old_value, new_value, source) VALUES (?, ?, ?, ?, ?)",
+                    (now, field, old_str, new_str, source),
+                )
+
+        if changed:
+            sets = ", ".join(f"{f} = ?" for f in changes if f in current and f not in ("id", "updated_at"))
+            vals = [changes[f] for f in changes if f in current and f not in ("id", "updated_at")]
+            vals.append(now)
+            await self.db.execute(
+                f"UPDATE bot_config SET {sets}, updated_at = ? WHERE id = 1",
+                vals,
+            )
+            await self.db.commit()
+
+        return changed
+
+    async def get_config_history(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        field_name: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Get config change history, newest first."""
+        if field_name:
+            cursor = await self.db.execute(
+                "SELECT * FROM config_history WHERE field_name = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+                (field_name, limit, offset),
+            )
+        else:
+            cursor = await self.db.execute(
+                "SELECT * FROM config_history ORDER BY id DESC LIMIT ? OFFSET ?",
+                (limit, offset),
+            )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_config_history_count(self, field_name: str | None = None) -> int:
+        if field_name:
+            cursor = await self.db.execute(
+                "SELECT COUNT(*) as cnt FROM config_history WHERE field_name = ?",
+                (field_name,),
+            )
+        else:
+            cursor = await self.db.execute("SELECT COUNT(*) as cnt FROM config_history")
+        row = await cursor.fetchone()
+        return row["cnt"]
 
     # ── Stats helpers ───────────────────────────────────────
 
