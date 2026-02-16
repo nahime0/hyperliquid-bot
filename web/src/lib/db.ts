@@ -17,7 +17,7 @@ export function getDb(): Database.Database {
 
 export function getWriteDb(): Database.Database {
   if (!_dbWrite) {
-    _dbWrite = new Database(DB_PATH, { fileMustExist: true });
+    _dbWrite = new Database(DB_PATH, { fileMustExist: true, timeout: 30000 });
     _dbWrite.pragma("journal_mode = WAL");
     _dbWrite.pragma("busy_timeout = 30000");
   }

@@ -379,7 +379,9 @@ class Database:
 
     async def connect(self) -> None:
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._db = await aiosqlite.connect(str(self._db_path), timeout=30)
+        self._db = await aiosqlite.connect(
+            str(self._db_path), timeout=30, isolation_level=None
+        )
         self._db.row_factory = aiosqlite.Row
         # WAL mode: allows concurrent reads while writing
         await self._db.execute("PRAGMA journal_mode=WAL")
