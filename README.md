@@ -3,7 +3,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
 ![Hyperliquid](https://img.shields.io/badge/Hyperliquid-Perpetuals-7B3FE4?logo=ethereum&logoColor=white)
 ![Claude AI](https://img.shields.io/badge/AI-Claude_Anthropic-191919?logo=anthropic&logoColor=white)
-![License](https://img.shields.io/badge/License-Private-red)
+![License](https://img.shields.io/badge/License-MIT-green)
 ![Status](https://img.shields.io/badge/Status-Paper_Trading-blue)
 
 Have you always dreamed of losing money through crypto? Well, this project is just right for you. I started this project to experiment whether it was possible to build a bot that, with the help of artificial intelligence, could generate revenue through cryptocurrencies.
