@@ -453,6 +453,15 @@ class Bot:
         else:
             raw_candidates = await self._strategy.generate_decisions()
 
+        # 5a. Filter out blacklisted coins before AI sees them
+        blacklist = self._settings.market.coin_blacklist
+        if blacklist:
+            before = len(raw_candidates)
+            raw_candidates = [d for d in raw_candidates if d.symbol not in blacklist]
+            dropped = before - len(raw_candidates)
+            if dropped:
+                logger.info("Filtered %d blacklisted candidate(s)", dropped)
+
         _signals_generated = sum(1 for d in raw_candidates if d.action in ("BUY", "SHORT"))
 
         if raw_candidates:
