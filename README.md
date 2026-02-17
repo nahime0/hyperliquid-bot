@@ -6,6 +6,27 @@
 ![License](https://img.shields.io/badge/License-Private-red)
 ![Status](https://img.shields.io/badge/Status-Paper_Trading-blue)
 
+Have you always dreamed of losing money through crypto? Well, this project is just right for you. I started this project to experiment whether it was possible to build a bot that, with the help of artificial intelligence, could generate revenue through cryptocurrencies.
+The answer is simple: no, it's not possible. Or at least this bot can't do it. Or maybe I just can't. Who knows.
+
+This bot uses an absurd number of well-known strategies to generate "signals" for potential trades. These signals are then sent to the AI (via Claude Code CLI or Cursor Agent CLI), which has the final say on entry decisions.
+There are also a bunch of techniques to maximize profit (Trailing Stop) and minimize losses (Stop Loss, etc.). However, after a week of use the balance is at a slight loss.
+
+The project was built with heavy use of Claude Code. All the more reason I'd advise against using it. But if you want to take a look at what crypto trading strategies look like, or you're just curious, feel free to browse the code.
+
+The project is not finished. Some things only half-work (for example, parameters have been set in the DB but aren't yet read by the bot, which still uses the `.env` file).
+There's a minimal web interface (in the `web/` folder) where you can monitor active trades, coins, generated events, and AI decisions.
+
+You can start it with:
+
+```bash
+cd web && npm run dev
+```
+
+Have fun!
+
+---
+
 Automated Python trading bot for **Hyperliquid Perpetual Futures**, with an optional AI advisor (**Claude Code CLI**). The bot runs 24/7 with **Mean Reversion + RSI Divergence** strategies (LONG and SHORT), conservative leverage (2-3x), and ultra-low fees (0.06% round-trip).
 
 > **Why Hyperliquid**: Binance Spot fees are too high (0.15% RT) for micro-profits. Binance Futures is blocked for EU users (MiCA). Hyperliquid offers 3x lower fees, shorting capability, leverage, and no KYC.
