@@ -40,7 +40,6 @@ from risk.position_tracker import PositionTracker
 from strategies.base import Strategy
 from strategies.cooldown import CooldownTracker
 from strategies.hard_blocks import check_hard_blocks
-from strategies.structure_filter import check_structure_confirmation
 from strategies.trend_filter import TrendFilter
 from utils.logger import get_logger
 
@@ -360,13 +359,6 @@ class BuyTheDipStrategy(Strategy):
                 symbol, score, SCORE_THRESHOLD, sig.dip_pct, sig.trend_4h, sig.trend_1h,
                 f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A",
             )
-            return None
-
-        # ── Structure confirmation on 5m candles ─────────────────
-        df_5m = self._md.get_candles(symbol, "5m")
-        confirmed, sc_reason = check_structure_confirmation(df_5m, "LONG")
-        if not confirmed:
-            logger.debug("[BTD LONG] %s -> no structure confirmation (%s), skipping", symbol, sc_reason)
             return None
 
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"

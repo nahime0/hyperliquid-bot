@@ -49,7 +49,6 @@ from data.db import Database
 from risk.position_tracker import PositionTracker
 from strategies.base import Strategy
 from strategies.cooldown import CooldownTracker
-from strategies.structure_filter import check_structure_confirmation
 from strategies.trend_filter import TrendFilter
 from utils.logger import get_logger
 
@@ -456,13 +455,6 @@ class MeanReversionStrategy(Strategy):
             )
             return None
 
-        # ── Structure confirmation on 5m candles ─────────────────
-        df_5m = self._md.get_candles(symbol, "5m")
-        confirmed, sc_reason = check_structure_confirmation(df_5m, "LONG")
-        if not confirmed:
-            logger.debug("[MR LONG] %s -> no structure confirmation (%s), skipping", symbol, sc_reason)
-            return None
-
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
         rsi_1h_str = f"{sig.rsi_1h:.1f}" if sig.rsi_1h is not None else "N/A"
 
@@ -552,13 +544,6 @@ class MeanReversionStrategy(Strategy):
                 f"{sig.volume_ratio:.1f}" if sig.volume_ratio else "N/A",
                 f"{sig.rsi_1h:.1f}" if sig.rsi_1h else "N/A",
             )
-            return None
-
-        # ── Structure confirmation on 5m candles ─────────────────
-        df_5m = self._md.get_candles(symbol, "5m")
-        confirmed, sc_reason = check_structure_confirmation(df_5m, "SHORT")
-        if not confirmed:
-            logger.debug("[MR SHORT] %s -> no structure confirmation (%s), skipping", symbol, sc_reason)
             return None
 
         vol_str = f"{sig.volume_ratio:.1f}" if sig.volume_ratio is not None else "N/A"
