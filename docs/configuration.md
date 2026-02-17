@@ -1,104 +1,104 @@
-# Configurazione
+# Configuration
 
-## Panoramica
+## Overview
 
-Tutte le configurazioni sono gestite tramite variabili d'ambiente caricate da `.env` via `python-dotenv`. Le configurazioni sono rappresentate come dataclass frozen (immutabili) in `config/settings.py`.
+All configurations are managed through environment variables loaded from `.env` via `python-dotenv`. Configurations are represented as frozen (immutable) dataclasses in `config/settings.py`.
 
-## Variabili d'ambiente
+## Environment Variables
 
 ### Hyperliquid API
 
-| Variabile | Default | Tipo | Descrizione |
+| Variable | Default | Type | Description |
 |---|---|---|---|
-| `HL_PRIVATE_KEY` | `""` | str | Private key del wallet (EIP-712). Necessaria per trading. |
-| `HL_ACCOUNT_ADDRESS` | `""` | str | Indirizzo pubblico del wallet. Usato per query account state. |
-| `HL_TESTNET` | `true` | bool | `true` per testnet, `false` per mainnet. |
-| `HL_DEFAULT_LEVERAGE` | `2` | int | Leva di default applicata ai core coins all'avvio. 2-3x consigliato. |
-| `HL_MARGIN_MODE` | `cross` | str | `cross` (condiviso) o `isolated` (per posizione). |
-| `HL_MAX_FUNDING_RATE` | `0.0005` | float | Max funding rate accettabile (0.05%/8h). Entry bloccata se superato. |
+| `HL_PRIVATE_KEY` | `""` | str | Wallet private key (EIP-712). Required for trading. |
+| `HL_ACCOUNT_ADDRESS` | `""` | str | Wallet public address. Used for account state queries. |
+| `HL_TESTNET` | `true` | bool | `true` for testnet, `false` for mainnet. |
+| `HL_DEFAULT_LEVERAGE` | `2` | int | Default leverage applied to core coins at startup. 2-3x recommended. |
+| `HL_MARGIN_MODE` | `cross` | str | `cross` (shared) or `isolated` (per position). |
+| `HL_MAX_FUNDING_RATE` | `0.0005` | float | Max acceptable funding rate (0.05%/8h). Entry blocked if exceeded. |
 
-**API URLs (derivati automaticamente):**
+**API URLs (derived automatically):**
 - Testnet: `https://api.hyperliquid-testnet.xyz`
 - Mainnet: `https://api.hyperliquid.xyz`
 
 ### AI Advisor (Claude Code CLI)
 
-| Variabile | Default | Tipo | Descrizione |
+| Variable | Default | Type | Description |
 |---|---|---|---|
-| `AI_DECISION_INTERVAL` | `60` | int | Secondi tra un ciclo decisionale e l'altro. |
-| `AI_MODEL` | `opus` | str | Modello Claude da usare (opus, haiku, sonnet). |
-| `AI_TIMEOUT` | `120` | int | Timeout per la chiamata CLI (secondi). |
-| `AI_MIN_CONFIDENCE` | `0.6` | float | Sotto questa soglia, l'azione e' forzata a HOLD. |
-| `AI_FALLBACK_ON_ERROR` | `HOLD` | str | Azione di default se l'AI non risponde. |
-| `AI_LOG_REASONING` | `true` | bool | Salva il reasoning completo di ogni decisione nel DB. |
+| `AI_DECISION_INTERVAL` | `60` | int | Seconds between decision cycles. |
+| `AI_MODEL` | `opus` | str | Claude model to use (opus, haiku, sonnet). |
+| `AI_TIMEOUT` | `120` | int | CLI call timeout (seconds). |
+| `AI_MIN_CONFIDENCE` | `0.6` | float | Below this threshold, action is forced to HOLD. |
+| `AI_FALLBACK_ON_ERROR` | `HOLD` | str | Default action if the AI doesn't respond. |
+| `AI_LOG_REASONING` | `true` | bool | Save full reasoning of each decision to DB. |
 
 ### Risk Management
 
-| Variabile | Default | Tipo | Descrizione |
+| Variable | Default | Type | Description |
 |---|---|---|---|
-| `MAX_TRADE_PCT` | `15` | float | Max % del bankroll per singolo trade. |
-| `STOP_LOSS_PCT` | `1.0` | float | Stop loss automatico (%). Applicato se non specificato. |
-| `TAKE_PROFIT_PCT` | `1.5` | float | Take profit automatico (%). |
-| `MAX_DAILY_DRAWDOWN_PCT` | `5.0` | float | Drawdown giornaliero max. Supera → pausa fino a mezzanotte UTC. |
-| `MAX_TOTAL_DRAWDOWN_PCT` | `15.0` | float | Drawdown totale max dal peak. Supera → kill switch. |
-| `MAX_OPEN_POSITIONS` | `15` | int | Max posizioni aperte (hard cap per dynamic, valore fisso se static). |
-| `DYNAMIC_POSITIONS` | `true` | bool | Scala max posizioni con balance (1 slot ogni USDC_PER_POSITION). |
-| `USDC_PER_POSITION` | `25.0` | float | USDC necessari per ogni slot di posizione. |
-| `TARGET_UTILIZATION` | `0.50` | float | Target utilizzo capitale (50% del balance come margine). |
-| `MAX_SIZE_BOOST` | `2.5` | float | Max moltiplicatore sul sizing base quando utilizzo e' basso. |
-| `AUTO_TAKE_PROFIT` | `false` | bool | Se true, genera TP automatico. Se false, il trailing stop gestisce i profitti. |
-| `MIN_BALANCE_USDC` | `50.0` | float | Balance minimo. Sotto → kill switch. |
-| `MIN_HOLDING_MINUTES` | `15` | int | Tempo minimo di holding prima che l'AI possa chiudere una posizione. |
+| `MAX_TRADE_PCT` | `15` | float | Max % of bankroll per single trade. |
+| `STOP_LOSS_PCT` | `1.0` | float | Automatic stop loss (%). Applied if not specified. |
+| `TAKE_PROFIT_PCT` | `1.5` | float | Automatic take profit (%). |
+| `MAX_DAILY_DRAWDOWN_PCT` | `5.0` | float | Max daily drawdown. Exceeded -> pause until midnight UTC. |
+| `MAX_TOTAL_DRAWDOWN_PCT` | `15.0` | float | Max total drawdown from peak. Exceeded -> kill switch. |
+| `MAX_OPEN_POSITIONS` | `15` | int | Max open positions (hard cap for dynamic, fixed value if static). |
+| `DYNAMIC_POSITIONS` | `true` | bool | Scale max positions with balance (1 slot per USDC_PER_POSITION). |
+| `USDC_PER_POSITION` | `25.0` | float | USDC needed for each position slot. |
+| `TARGET_UTILIZATION` | `0.50` | float | Target capital utilization (50% of balance as margin). |
+| `MAX_SIZE_BOOST` | `2.5` | float | Max multiplier on base sizing when utilization is low. |
+| `AUTO_TAKE_PROFIT` | `false` | bool | If true, generates automatic TP. If false, trailing stop handles profits. |
+| `MIN_BALANCE_USDC` | `50.0` | float | Minimum balance. Below -> kill switch. |
+| `MIN_HOLDING_MINUTES` | `15` | int | Minimum holding time before AI can close a position. |
 
 ### Trailing Stop
 
-| Variabile | Default | Tipo | Descrizione |
+| Variable | Default | Type | Description |
 |---|---|---|---|
-| `TRAILING_BREAKEVEN_PCT` | `1.0` | float | Sposta SL a entry price dopo gain >= X%. |
-| `TRAILING_START_PCT` | `1.5` | float | Inizia trailing dopo gain >= X%. |
-| `TRAILING_DISTANCE_PCT` | `1.0` | float | Distanza trail dal prezzo max/min. |
-| `TRAILING_TIGHT_PCT` | `2.5` | float | Tighten trail dopo gain >= X%. |
-| `TRAILING_TIGHT_DISTANCE_PCT` | `0.75` | float | Distanza trail stretta. |
+| `TRAILING_BREAKEVEN_PCT` | `1.0` | float | Move SL to entry price after gain >= X%. |
+| `TRAILING_START_PCT` | `1.5` | float | Start trailing after gain >= X%. |
+| `TRAILING_DISTANCE_PCT` | `1.0` | float | Trail distance from max/min price. |
+| `TRAILING_TIGHT_PCT` | `2.5` | float | Tighten trail after gain >= X%. |
+| `TRAILING_TIGHT_DISTANCE_PCT` | `0.75` | float | Tight trail distance. |
 
 ### Time Stop
 
-| Variabile | Default | Tipo | Descrizione |
+| Variable | Default | Type | Description |
 |---|---|---|---|
-| `TIME_STOP_HOURS` | `4.0` | float | Chiudi posizioni dopo X ore con PnL basso. |
-| `TIME_STOP_MIN_PNL_PCT` | `0.5` | float | Solo se PnL < X%. |
+| `TIME_STOP_HOURS` | `4.0` | float | Close positions after X hours with low PnL. |
+| `TIME_STOP_MIN_PNL_PCT` | `0.5` | float | Only if PnL < X%. |
 
 ### Cooldown
 
-| Variabile | Default | Tipo | Descrizione |
+| Variable | Default | Type | Description |
 |---|---|---|---|
-| `SYMBOL_COOLDOWN_SEC` | `1800` | int | Cooldown per-symbol dopo perdita (30 min). |
-| `GLOBAL_COOLDOWN_SEC` | `900` | int | Cooldown globale dopo N perdite (15 min). |
-| `GLOBAL_COOLDOWN_LOSSES` | `3` | int | Numero perdite che triggera il cooldown globale. |
+| `SYMBOL_COOLDOWN_SEC` | `1800` | int | Per-symbol cooldown after loss (30 min). |
+| `GLOBAL_COOLDOWN_SEC` | `900` | int | Global cooldown after N losses (15 min). |
+| `GLOBAL_COOLDOWN_LOSSES` | `3` | int | Number of losses that triggers global cooldown. |
 
 ### Market Discovery & Liquidity
 
-| Variabile | Default | Tipo | Descrizione |
+| Variable | Default | Type | Description |
 |---|---|---|---|
-| `MIN_PAIR_VOLUME` | `50000` | float | Volume 24h minimo in USDC per includere un coin nella discovery. Filtro su `dayNtlVlm` da Hyperliquid. |
-| `MAX_COINS` | `60` | int | Max coin perpetual da monitorare. |
-| `MAX_SPREAD_PCT` | `0.5` | float | Max bid-ask spread % per entry. Se spread > soglia, BUY/SHORT/SCALE_UP bloccati. 0 = disabilitato. |
-| `MIN_CANDLE_VOLUME_USDC` | `10000` | float | Volume minimo USDC per candela nelle strategie. Coins con volume candela inferiore vengono skippati. |
+| `MIN_PAIR_VOLUME` | `50000` | float | Minimum 24h volume in USDC to include a coin in discovery. Filters on `dayNtlVlm` from Hyperliquid. |
+| `MAX_COINS` | `60` | int | Max perpetual coins to monitor. |
+| `MAX_SPREAD_PCT` | `0.5` | float | Max bid-ask spread % for entry. If spread > threshold, BUY/SHORT/SCALE_UP blocked. 0 = disabled. |
+| `MIN_CANDLE_VOLUME_USDC` | `10000` | float | Minimum USDC volume per candle in strategies. Coins with lower candle volume are skipped. |
 
-### Telegram (opzionale)
+### Telegram (optional)
 
-| Variabile | Default | Tipo | Descrizione |
+| Variable | Default | Type | Description |
 |---|---|---|---|
-| `TELEGRAM_BOT_TOKEN` | `""` | str | Token del bot Telegram (da @BotFather). |
-| `TELEGRAM_CHAT_ID` | `""` | str | Chat ID per ricevere notifiche. |
+| `TELEGRAM_BOT_TOKEN` | `""` | str | Telegram bot token (from @BotFather). |
+| `TELEGRAM_CHAT_ID` | `""` | str | Chat ID for receiving notifications. |
 
-### Altro
+### Other
 
-| Variabile | Default | Tipo | Descrizione |
+| Variable | Default | Type | Description |
 |---|---|---|---|
-| `LOG_LEVEL` | `INFO` | str | Livello log: DEBUG, INFO, WARNING, ERROR. |
-| `DB_PATH` | `data/trading_bot.db` | str | Percorso del database SQLite. |
+| `LOG_LEVEL` | `INFO` | str | Log level: DEBUG, INFO, WARNING, ERROR. |
+| `DB_PATH` | `data/trading_bot.db` | str | SQLite database path. |
 
-## Dataclass di configurazione
+## Configuration Dataclasses
 
 ```python
 # config/settings.py
@@ -136,7 +136,7 @@ Settings
 
 ## CLI Override
 
-Il flag `--live` override `HL_TESTNET=true` a runtime:
+The `--live` flag overrides `HL_TESTNET=true` at runtime:
 
 ```python
 if args.live:

@@ -47,8 +47,8 @@ binance/
 - **Exchange** class: trading (`market_open`, `market_close`, `order`, `cancel`, `update_leverage`)
 - SDK is synchronous — wrapped with `asyncio.to_thread()`
 - Auth: private key EIP-712 (SDK handles signing)
-- `info.meta()` → universe with `szDecimals` for rounding
-- `info.all_mids()` → mid prices for all assets
+- `info.meta()` -> universe with `szDecimals` for rounding
+- `info.all_mids()` -> mid prices for all assets
 - WebSocket: SDK internal (threading) for `allMids` and `candle` streams
 
 ## Configuration (.env)
@@ -65,17 +65,17 @@ HL_MAX_FUNDING_RATE=0.0005
 ## Decision Flow
 
 ```
-Loop (60s) → Risk Refresh → Check SL/TP → Update Strategies
-           → Generate Candidates (rule-based)
-           → AI Advisor (optional, via claude CLI)
-           → Risk Validate → Execute
+Loop (60s) -> Risk Refresh -> Check SL/TP -> Update Strategies
+           -> Generate Candidates (rule-based)
+           -> AI Advisor (optional, via claude CLI)
+           -> Risk Validate -> Execute
 ```
 
 ### Actions
-- `BUY` → LONG entry (`exchange.market_open(coin, is_buy=True, sz)`)
-- `SHORT` → SHORT entry (`exchange.market_open(coin, is_buy=False, sz)`)
-- `CLOSE` → Close position (`exchange.market_close(coin)`)
-- `HOLD` → Do nothing
+- `BUY` -> LONG entry (`exchange.market_open(coin, is_buy=True, sz)`)
+- `SHORT` -> SHORT entry (`exchange.market_open(coin, is_buy=False, sz)`)
+- `CLOSE` -> Close position (`exchange.market_close(coin)`)
+- `HOLD` -> Do nothing
 
 ## AI Advisor
 
@@ -111,20 +111,20 @@ Invocation: `claude -p <payload> --json-schema <schema> --output-format json --m
 - Max per trade: 10% bankroll
 - Stop loss: -1% (auto-generated)
 - Take profit: off by default (trailing stop handles profit-taking). Enable with `AUTO_TAKE_PROFIT=true`
-- Daily drawdown max: -5% → pause
-- Total drawdown max: -15% → kill switch
+- Daily drawdown max: -5% -> pause
+- Total drawdown max: -15% -> kill switch
 - Max positions: dynamic (1 per 200 USDC, capped at `MAX_OPEN_POSITIONS`)
 - Min balance: 50 USDC
-- 5 consecutive losses → kill switch
+- 5 consecutive losses -> kill switch
 
 ### Trailing Stop (direction-aware)
-- Break-even: gain>=1.0% → SL at entry
-- Trailing: gain>=1.5% → SL follows at 1.0% distance
-- Tight: gain>=2.5% → SL at 0.75% distance
+- Break-even: gain>=1.0% -> SL at entry
+- Trailing: gain>=1.5% -> SL follows at 1.0% distance
+- Tight: gain>=2.5% -> SL at 0.75% distance
 - LONG: SL only rises. SHORT: SL only falls.
 
 ### Time Stop
-- 4h+ with PnL<0.5% → auto-close
+- 4h+ with PnL<0.5% -> auto-close
 
 ### Kelly Criterion (f/4)
 - Cold start (<10 trades): 5% fixed
@@ -157,12 +157,12 @@ Invocation: `claude -p <payload> --json-schema <schema> --output-format json --m
 
 ## Testing
 
-Vedi [testing.md](testing.md) per dettagli completi.
+See [testing.md](testing.md) for full details.
 
 ```bash
-# Unit tests (veloci, nessuna dipendenza esterna)
+# Unit tests (fast, no external dependencies)
 .venv/bin/python -m pytest tests/ -m "not integration" -v
 
-# Integration tests (richiedono claude CLI)
+# Integration tests (require claude CLI)
 .venv/bin/python -m pytest tests/ -m integration -v
 ```

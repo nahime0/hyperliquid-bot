@@ -2,24 +2,24 @@
 
 ## Overview
 
-Il bot usa un **AI advisor opzionale** basato su Claude Code CLI. Le decisioni vengono generate autonomamente dalle strategie (Mean Reversion, RSI Divergence), e l'AI interviene come **advisor** con capacita' di:
+The bot uses an **optional AI advisor** based on Claude Code CLI. Decisions are generated autonomously by the strategies (Mean Reversion, RSI Divergence), and the AI intervenes as an **advisor** with the ability to:
 
-- **Approvare** opportunita' di trading (con possibili aggiustamenti)
-- **Deferire** opportunita' (aspettare N cicli o un certo prezzo)
-- **Chiudere** posizioni aperte
-- **Aggiustare** SL/TP/leverage su posizioni aperte
+- **Approve** trading opportunities (with possible adjustments)
+- **Defer** opportunities (wait N cycles or a certain price)
+- **Close** open positions
+- **Adjust** SL/TP/leverage on open positions
 
-Il flag `--no-ai` disabilita completamente l'AI, lasciando il bot in modalita' pure rule-based.
+The `--no-ai` flag completely disables the AI, leaving the bot in pure rule-based mode.
 
-## Architettura
+## Architecture
 
-**Una singola chiamata CLI per ciclo** — semplice e affidabile.
+**A single CLI call per cycle** — simple and reliable.
 
 ```
-Strategie generano candidates
+Strategies generate candidates
         |
         v
-Check deferred (condizioni soddisfatte?)
+Check deferred (conditions met?)
         |
         v
 Build JSON payload (positions + opportunities + account + history)
@@ -34,13 +34,13 @@ Parse structured_output
 Process: CLOSE/ADJUST positions, approve/defer opportunities
         |
         v
-Risk validate → Execute
+Risk validate -> Execute
 ```
 
-Se non ci sono posizioni aperte E nessuna opportunita', la chiamata AI viene saltata.
-Su errore o timeout: log warning, il bot continua autonomamente.
+If there are no open positions AND no opportunities, the AI call is skipped.
+On error or timeout: log warning, the bot continues autonomously.
 
-## Invocazione CLI
+## CLI Invocation
 
 ```bash
 claude -p "<json_payload>" \
@@ -53,10 +53,10 @@ claude -p "<json_payload>" \
     --max-turns 1
 ```
 
-- `--json-schema` enforce la struttura dell'output
-- `--allowedTools ""` disabilita tool (pura inferenza, nessun file read)
-- `--max-turns 1` previene loop agentici
-- Timeout: 120s (configurabile via `AI_TIMEOUT`)
+- `--json-schema` enforces the output structure
+- `--allowedTools ""` disables tools (pure inference, no file reads)
+- `--max-turns 1` prevents agentic loops
+- Timeout: 120s (configurable via `AI_TIMEOUT`)
 
 ## Input JSON
 
@@ -122,23 +122,23 @@ claude -p "<json_payload>" \
 }
 ```
 
-### Azioni per posizioni
+### Position Actions
 
-| Azione | Effetto |
+| Action | Effect |
 |---|---|
-| `HOLD` | Nessuna azione (trailing stop/time stop continuano) |
-| `CLOSE` | Chiusura immediata della posizione |
-| `ADJUST` | Modifica SL, TP, o leverage tramite `adjustments` |
-| `SCALE_UP` | Aggiunge margine a una posizione in profitto (VWAP entry). Richiede `size_pct` in `adjustments` |
+| `HOLD` | No action (trailing stop/time stop continue) |
+| `CLOSE` | Immediate position closure |
+| `ADJUST` | Modify SL, TP, or leverage via `adjustments` |
+| `SCALE_UP` | Add margin to a profitable position (VWAP entry). Requires `size_pct` in `adjustments` |
 
-### Azioni per opportunita'
+### Opportunity Actions
 
-| Azione | Effetto |
+| Action | Effect |
 |---|---|
-| `BUY`/`SHORT` | Approva l'entry (con eventuali `adjustments`) |
-| `HOLD` | Deferisce l'entry. Usa `defer` per condizioni |
+| `BUY`/`SHORT` | Approve entry (with optional `adjustments`) |
+| `HOLD` | Defer entry. Use `defer` for conditions |
 
-### Condizioni di defer
+### Defer Conditions
 
 ```json
 {
@@ -150,34 +150,34 @@ claude -p "<json_payload>" \
 }
 ```
 
-- `wait_cycles`: rievaluta dopo N cicli (~60s ciascuno)
-- `wait_until_price_above/below`: rievaluta quando il prezzo raggiunge il livello
+- `wait_cycles`: re-evaluate after N cycles (~60s each)
+- `wait_until_price_above/below`: re-evaluate when price reaches the level
 
-Le opportunita' deferred sono in-memory (cancellate al restart).
+Deferred opportunities are persisted in the database.
 
 ## System Prompt
 
-Il file `prompts/ai_advisor.md` contiene le istruzioni per l'AI advisor, tra cui:
+The file `prompts/ai_advisor.md` contains the instructions for the AI advisor, including:
 
-- Ruolo e responsabilita'
-- Linee guida per decisioni su posizioni e opportunita'
-- Regole di risk management
-- Criteri per defer vs approva
+- Role and responsibilities
+- Guidelines for position and opportunity decisions
+- Risk management rules
+- Criteria for defer vs approve
 
-## Schema JSON
+## JSON Schema
 
-Il file `schemas/ai_advisor_output.json` definisce la struttura dell'output enforced da `--json-schema`.
+The file `schemas/ai_advisor_output.json` defines the output structure enforced by `--json-schema`.
 
-## Configurazione
+## Configuration
 
-| Variabile | Default | Descrizione |
+| Variable | Default | Description |
 |---|---|---|
-| `AI_DECISION_INTERVAL` | `60` | Secondi tra un ciclo e l'altro |
-| `AI_MODEL` | `opus` | Modello Claude Code (`opus`, `sonnet`, `haiku`) |
-| `AI_TIMEOUT` | `120` | Timeout per la chiamata CLI (secondi) |
-| `AI_MIN_CONFIDENCE` | `0.6` | Sotto questa soglia → HOLD forzato |
-| `AI_FALLBACK_ON_ERROR` | `HOLD` | Azione di default se l'AI non risponde |
-| `AI_LOG_REASONING` | `true` | Logga il reasoning dell'AI |
+| `AI_DECISION_INTERVAL` | `60` | Seconds between cycles |
+| `AI_MODEL` | `opus` | Claude Code model (`opus`, `sonnet`, `haiku`) |
+| `AI_TIMEOUT` | `120` | CLI call timeout (seconds) |
+| `AI_MIN_CONFIDENCE` | `0.6` | Below this threshold -> forced HOLD |
+| `AI_FALLBACK_ON_ERROR` | `HOLD` | Default action if the AI doesn't respond |
+| `AI_LOG_REASONING` | `true` | Log AI reasoning |
 
 ## Decision Dataclass
 
@@ -197,11 +197,11 @@ class Decision:
     raw_response: str | None
 ```
 
-Definita in `core/types.py`.
+Defined in `core/types.py`.
 
-## Costi
+## Costs
 
-L'AI advisor usa **una singola chiamata CLI per ciclo** al modello configurato.
-La chiamata viene saltata se non ci sono posizioni ne' opportunita'.
+The AI advisor uses **a single CLI call per cycle** to the configured model.
+The call is skipped if there are no positions or opportunities.
 
-Con `--no-ai`, il costo AI e' zero (pure rule-based).
+With `--no-ai`, AI cost is zero (pure rule-based).

@@ -1,35 +1,35 @@
 # Risk Management
 
-## Architettura
+## Architecture
 
-Il sistema di risk management e' composto da tre componenti cooperanti:
+The risk management system is composed of three cooperating components:
 
-1. **RiskManager** (`risk/risk_manager.py`) — Validatore centrale con potere di veto
-2. **PositionTracker** (`risk/position_tracker.py`) — Gestione posizioni, SL/TP, trailing stop
-3. **PositionSizer** (`risk/position_sizer.py`) — Calcolo dimensione posizione (Kelly Criterion)
+1. **RiskManager** (`risk/risk_manager.py`) — Central validator with veto power
+2. **PositionTracker** (`risk/position_tracker.py`) — Position management, SL/TP, trailing stop
+3. **PositionSizer** (`risk/position_sizer.py`) — Position size calculation (Kelly Criterion)
 
-Il Risk Manager ha **potere di veto assoluto** su ogni decisione. Anche se la strategia e l'AI dicono BUY, il Risk Manager puo' bloccare.
+The Risk Manager has **absolute veto power** over every decision. Even if the strategy and AI say BUY, the Risk Manager can block it.
 
 ## Kill Switch
 
-Il bot si **ferma completamente** se una di queste condizioni e' vera:
+The bot **stops completely** if any of these conditions is true:
 
-| Condizione | Soglia | Azione |
+| Condition | Threshold | Action |
 |---|---|---|
-| Drawdown totale | >= 15% dal peak | Kill switch (ferma tutto) |
+| Total drawdown | >= 15% from peak | Kill switch (stops everything) |
 | Balance | < 50 USDC | Kill switch |
-| Perdite consecutive | >= 5 | Kill switch |
+| Consecutive losses | >= 5 | Kill switch |
 
-Una volta attivato, il kill switch richiede un **reset manuale**.
+Once activated, the kill switch requires a **manual reset**.
 
-Il drawdown e' calcolato dal peak balance storico:
+Drawdown is calculated from the historical peak balance:
 ```
 drawdown_pct = (peak_balance - current_balance) / peak_balance * 100
 ```
 
 ## Daily Pause
 
-Se il drawdown intra-giornaliero supera il **5%**, le nuove entry (BUY e SHORT) vengono bloccate fino al giorno successivo (reset a mezzanotte UTC). CLOSE e' sempre permesso.
+If the intra-day drawdown exceeds **5%**, new entries (BUY and SHORT) are blocked until the next day (reset at midnight UTC). CLOSE is always allowed.
 
 ```
 daily_drawdown = (start_of_day_balance - current_balance) / start_of_day_balance * 100
@@ -37,53 +37,53 @@ daily_drawdown = (start_of_day_balance - current_balance) / start_of_day_balance
 
 ## Validation Flow
 
-Ogni decisione passa attraverso `validate_decision()`:
+Every decision passes through `validate_decision()`:
 
-1. **HOLD** → pass-through (sempre approvato)
-2. **CLOSE/SELL** → check holding period minimo (15 min)
-3. **Kill switch** → bloccato se attivo
-4. **Daily pause** → bloccato se attivo (solo BUY/SHORT)
-5. **Symbol required** → bloccato se non specificato
-6. **Max positions** → bloccato se >= max posizioni (dinamico o statico)
-7. **Duplicate** → bloccato se esiste gia' posizione sullo stesso coin
-8. **Spread check** → bloccato se bid-ask spread > max_spread_pct (BUY/SHORT)
-9. **Min balance** → bloccato se balance < 50 USDC
-10. **Min confidence** → bloccato se confidence < 0.5
-11. **Position sizing** → calcolo Kelly Criterion
-12. **Auto SL/TP** → applicato automaticamente se non specificato
+1. **HOLD** -> pass-through (always approved)
+2. **CLOSE/SELL** -> check minimum holding period (15 min)
+3. **Kill switch** -> blocked if active
+4. **Daily pause** -> blocked if active (BUY/SHORT only)
+5. **Symbol required** -> blocked if not specified
+6. **Max positions** -> blocked if >= max positions (dynamic or static)
+7. **Duplicate** -> blocked if position already exists on the same coin
+8. **Spread check** -> blocked if bid-ask spread > max_spread_pct (BUY/SHORT)
+9. **Min balance** -> blocked if balance < 50 USDC
+10. **Min confidence** -> blocked if confidence < 0.5
+11. **Position sizing** -> Kelly Criterion calculation
+12. **Auto SL/TP** -> applied automatically if not specified
 
-### SL automatico (direction-aware)
+### Automatic SL (direction-aware)
 
-Se la decisione non include SL, viene calcolato automaticamente:
+If the decision doesn't include SL, it's calculated automatically:
 
-| Direzione | Stop Loss |
+| Direction | Stop Loss |
 |---|---|
 | BUY (LONG) | price * (1 - stop_loss_pct / 100) |
 | SHORT | price * (1 + stop_loss_pct / 100) |
 
 Default: SL = 1%.
 
-### Take Profit (opzionale)
+### Take Profit (optional)
 
-Di default `AUTO_TAKE_PROFIT=false`: il trailing stop e' il meccanismo primario di profit-taking. Con `AUTO_TAKE_PROFIT=true`, viene generato anche un TP automatico:
+By default `AUTO_TAKE_PROFIT=false`: the trailing stop is the primary profit-taking mechanism. With `AUTO_TAKE_PROFIT=true`, an automatic TP is also generated:
 
-| Direzione | Take Profit |
+| Direction | Take Profit |
 |---|---|
 | BUY (LONG) | price * (1 + take_profit_pct / 100) |
 | SHORT | price * (1 - take_profit_pct / 100) |
 
-L'AI advisor puo' comunque specificare un TP esplicito indipendentemente da questa impostazione.
+The AI advisor can still specify an explicit TP regardless of this setting.
 
-### Max Positions (dinamico)
+### Max Positions (dynamic)
 
-Con `DYNAMIC_POSITIONS=true` (default), il numero massimo di posizioni scala col balance:
+With `DYNAMIC_POSITIONS=true` (default), the maximum number of positions scales with balance:
 
 ```
 max_positions = min(MAX_OPEN_POSITIONS, balance // USDC_PER_POSITION)
-max_positions = max(1, max_positions)  # floor a 1
+max_positions = max(1, max_positions)  # floor at 1
 ```
 
-Esempio con `USDC_PER_POSITION=25`, `MAX_OPEN_POSITIONS=15`:
+Example with `USDC_PER_POSITION=25`, `MAX_OPEN_POSITIONS=15`:
 | Balance | Max Positions |
 |---|---|
 | 10 USDC | 1 (floor) |
@@ -94,42 +94,42 @@ Esempio con `USDC_PER_POSITION=25`, `MAX_OPEN_POSITIONS=15`:
 
 ## Capital Utilization
 
-Il bot traccia l'utilizzo del capitale (margine usato / balance) e adatta il sizing dinamicamente.
+The bot tracks capital utilization (margin used / balance) and adapts sizing dynamically.
 
-### Configurazione
+### Configuration
 
-| Parametro | Default | Descrizione |
+| Parameter | Default | Description |
 |---|---|---|
-| `TARGET_UTILIZATION` | `0.50` | Target 50% del balance come margine |
-| `MAX_SIZE_BOOST` | `2.5` | Max moltiplicatore sul sizing base |
+| `TARGET_UTILIZATION` | `0.50` | Target 50% of balance as margin |
+| `MAX_SIZE_BOOST` | `2.5` | Max multiplier on base sizing |
 
 ### Boost Formula
 
-Quando l'utilizzo e' sotto il target, il sizing viene amplificato:
+When utilization is below target, sizing is amplified:
 
 ```
 utilization = total_margin_used / balance
 if utilization < target:
     boost = min(target / max(utilization, 0.05), max_size_boost)
 else:
-    boost = 1.0  # nessuna amplificazione
+    boost = 1.0  # no amplification
 ```
 
-Il boost viene applicato al `size_pct` calcolato da Kelly (o cold-start) **prima** dell'hard cap `max_trade_pct`.
+The boost is applied to the `size_pct` calculated by Kelly (or cold-start) **before** the hard cap `max_trade_pct`.
 
-### Esempio
+### Example
 
-Con balance=990, margin_used=70 (7% utilizzo), target=50%:
+With balance=990, margin_used=70 (7% utilization), target=50%:
 - `boost = min(0.50 / 0.07, 2.5) = min(7.14, 2.5) = 2.5`
-- Cold-start 5% → 5% * 2.5 = 12.5% (sotto hard cap 15%)
+- Cold-start 5% -> 5% * 2.5 = 12.5% (below hard cap 15%)
 
 ### SCALE_UP
 
-L'AI advisor puo' raccomandare `SCALE_UP` su posizioni in profitto:
-- Aggiunge margine alla posizione esistente nella stessa direzione
-- Entry price viene ricalcolato come VWAP (media pesata)
-- Bloccato su posizioni in perdita
-- Validato dal Risk Manager (sizing, balance, utilization)
+The AI advisor can recommend `SCALE_UP` on profitable positions:
+- Adds margin to the existing position in the same direction
+- Entry price is recalculated as VWAP (weighted average)
+- Blocked on losing positions
+- Validated by Risk Manager (sizing, balance, utilization)
 
 ## Position Sizing (Kelly Criterion)
 
@@ -137,49 +137,49 @@ L'AI advisor puo' raccomandare `SCALE_UP` su posizioni in profitto:
 
 ```
 f = (win_rate * payoff_ratio - (1 - win_rate)) / payoff_ratio
-size = bankroll * (f / 4)  # quarter-Kelly (conservativo)
+size = bankroll * (f / 4)  # quarter-Kelly (conservative)
 ```
 
-### Cold Start (< 10 trade)
+### Cold Start (< 10 trades)
 
-Quando non c'e' abbastanza storico per Kelly:
-- Size fissa: **5% del bankroll**
-- AI hint come soft cap (prende il minimo tra 5% e AI suggestion)
+When there's not enough history for Kelly:
+- Fixed size: **5% of bankroll**
+- AI hint as soft cap (takes the minimum between 5% and AI suggestion)
 - Hard cap: `max_trade_pct` (default 10%)
 
 ### Post Cold Start
 
-- Kelly fraction calcolata da win_rate, avg_win, avg_loss storici
-- Quarter-Kelly per conservativismo
-- Scalata per confidence dell'AI
-- AI suggestion come soft cap
-- Hard cap da config
-- Floor: min 10 USDC (ordini piu' piccoli vengono scartati)
+- Kelly fraction calculated from historical win_rate, avg_win, avg_loss
+- Quarter-Kelly for conservatism
+- Scaled by AI confidence
+- AI suggestion as soft cap
+- Hard cap from config
+- Floor: min 10 USDC (smaller orders are discarded)
 
-### Calcolo notional
+### Notional Calculation
 
 ```python
-margin = size_usdc  # dall'output Kelly
-notional = margin * leverage  # es. margin 10 USDC * 2x = 20 USDC notional
-qty = notional / price  # quantita' dell'asset
-qty = round_size(coin, qty)  # arrotondato a szDecimals
+margin = size_usdc  # from Kelly output
+notional = margin * leverage  # e.g. margin 10 USDC * 2x = 20 USDC notional
+qty = notional / price  # asset quantity
+qty = round_size(coin, qty)  # rounded to szDecimals
 ```
 
 ## Position Tracking
 
 ### Open Position
 
-Ogni BUY o SHORT crea una posizione nel DB con:
+Every BUY or SHORT creates a position in the DB with:
 - `entry_price`, `quantity`, `stop_loss`, `take_profit`
-- `direction` (LONG o SHORT)
+- `direction` (LONG or SHORT)
 - `leverage`
-- `max_price_seen` (per trailing LONG)
-- `min_price_seen` (per trailing SHORT)
-- `original_sl` (SL originale, non modificato dal trailing)
+- `max_price_seen` (for LONG trailing)
+- `min_price_seen` (for SHORT trailing)
+- `original_sl` (original SL, unmodified by trailing)
 
 ### Close Position
 
-PnL direction-aware:
+Direction-aware PnL:
 ```python
 if direction == "LONG":
     pnl = (exit_price - entry_price) * quantity
@@ -195,11 +195,11 @@ pnl_net = pnl - fee
 
 ### LONG Trailing
 
-Traccia il prezzo massimo visto (`max_price_seen`). Il SL puo' solo salire, mai scendere.
+Tracks the maximum price seen (`max_price_seen`). SL can only rise, never fall.
 
-| Fase | Trigger (gain_pct) | SL |
+| Phase | Trigger (gain_pct) | SL |
 |---|---|---|
-| Fisso | < 1.0% | SL originale (non si muove) |
+| Fixed | < 1.0% | Original SL (doesn't move) |
 | Break-even | >= 1.0% | SL = entry price |
 | Trailing | >= 1.5% | SL = max_price * (1 - 1.0%) |
 | Tight trailing | >= 2.5% | SL = max_price * (1 - 0.75%) |
@@ -210,11 +210,11 @@ gain_pct = (max_price_seen - entry_price) / entry_price * 100
 
 ### SHORT Trailing
 
-Traccia il prezzo minimo visto (`min_price_seen`). Il SL puo' solo scendere, mai salire.
+Tracks the minimum price seen (`min_price_seen`). SL can only fall, never rise.
 
-| Fase | Trigger (gain_pct) | SL |
+| Phase | Trigger (gain_pct) | SL |
 |---|---|---|
-| Fisso | < 1.0% | SL originale |
+| Fixed | < 1.0% | Original SL |
 | Break-even | >= 1.0% | SL = entry price |
 | Trailing | >= 1.5% | SL = min_price * (1 + 1.0%) |
 | Tight trailing | >= 2.5% | SL = min_price * (1 + 0.75%) |
@@ -225,9 +225,9 @@ gain_pct = (entry_price - min_price_seen) / entry_price * 100
 
 ## Time Stop
 
-Posizioni aperte da piu' di `time_stop_hours` (default 4h) con PnL inferiore a `time_stop_min_pnl_pct` (default 0.5%) vengono chiuse automaticamente.
+Positions open for more than `time_stop_hours` (default 4h) with PnL below `time_stop_min_pnl_pct` (default 0.5%) are automatically closed.
 
-PnL direction-aware:
+Direction-aware PnL:
 ```python
 if direction == "LONG":
     pnl_pct = (current_price - entry) / entry * 100
@@ -237,7 +237,7 @@ else:
 
 ## Liquidation Monitoring
 
-Ad ogni refresh, il Risk Manager controlla la distanza dal prezzo di liquidazione per ogni posizione aperta:
+At every refresh, the Risk Manager checks the distance from the liquidation price for every open position:
 
 ```python
 distance_pct = abs(entry_price - liquidation_price) / entry_price * 100
@@ -245,26 +245,26 @@ if distance_pct < liquidation_buffer_pct:  # default 5%
     logger.warning("LIQUIDATION WARNING: ...")
 ```
 
-Con leva 2x e SL 1%, il rischio di liquidazione e' praticamente zero (servirebbe un movimento del 50%).
+With 2x leverage and 1% SL, liquidation risk is practically zero (it would require a 50% move).
 
 ## Cooldown
 
-| Tipo | Durata | Trigger |
+| Type | Duration | Trigger |
 |---|---|---|
-| Per-symbol | 30 min | Dopo una perdita sullo stesso coin |
-| Global | 15 min | Dopo 3 perdite consecutive |
+| Per-symbol | 30 min | After a loss on the same coin |
+| Global | 15 min | After 3 consecutive losses |
 
-Il cooldown previene il "revenge trading" dopo le perdite.
+Cooldown prevents "revenge trading" after losses.
 
 ## Liquidity Filters
 
 ### Discovery: 24h Volume Filter
 
-La discovery dei coins usa `meta_and_asset_ctxs()` per ottenere il volume 24h reale (`dayNtlVlm`) di ogni asset. I coins con volume sotto `MIN_PAIR_VOLUME` (default 50k USDC) vengono esclusi. I coins sono ordinati per volume decrescente, con i piu' liquidi che hanno priorita'. CORE_COINS (BTC, ETH, SOL) sono inclusi solo se superano il filtro volume.
+Coin discovery uses `meta_and_asset_ctxs()` to get the real 24h volume (`dayNtlVlm`) for each asset. Coins with volume below `MIN_PAIR_VOLUME` (default 50k USDC) are excluded. Coins are sorted by descending volume, with the most liquid ones having priority. CORE_COINS (BTC, ETH, SOL) are included only if they pass the volume filter.
 
 ### Pre-entry Spread Check
 
-Prima di ogni BUY, SHORT o SCALE_UP, il Risk Manager controlla il bid-ask spread via L2 order book:
+Before every BUY, SHORT, or SCALE_UP, the Risk Manager checks the bid-ask spread via L2 order book:
 
 ```python
 spread_pct = (best_ask - best_bid) / mid * 100
@@ -272,27 +272,27 @@ if spread_pct > max_spread_pct:  # default 0.5%
     block("Spread too wide")
 ```
 
-| Parametro | Default | Descrizione |
+| Parameter | Default | Description |
 |---|---|---|
-| `MAX_SPREAD_PCT` | `0.5` | Max spread % per entry. 0 = disabilitato. |
+| `MAX_SPREAD_PCT` | `0.5` | Max spread % for entry. 0 = disabled. |
 
-Graceful degradation: se il L2 snapshot fallisce, l'entry viene comunque permessa.
+Graceful degradation: if the L2 snapshot fails, the entry is still allowed.
 
-### Candle Volume Floor (Strategie)
+### Candle Volume Floor (Strategies)
 
-Ogni strategia (Mean Reversion, RSI Divergence) verifica il volume USDC della candela corrente prima di generare segnali:
+Each strategy (Mean Reversion, RSI Divergence) checks the USDC volume of the current candle before generating signals:
 
 ```python
-volume_usdc = close * volume  # ultima candela
+volume_usdc = close * volume  # last candle
 if volume_usdc < min_candle_volume_usdc:  # default 10,000 USDC
-    skip  # nessun segnale generato
+    skip  # no signal generated
 ```
 
-Questo previene segnali su coins con grafico "a gradini" e volume zero (es. POLYX).
+This prevents signals on coins with "staircase" charts and zero volume (e.g. POLYX).
 
 ## Anti-Churning
 
-Il main loop implementa due protezioni anti-churning:
+The main loop implements two anti-churning protections:
 
-1. **Cross-decision:** Se nello stesso ciclo ci sono CLOSE e BUY/SHORT sullo stesso coin, l'entry viene scartata
-2. **Intra-cycle:** Se un coin viene chiuso durante il ciclo, non puo' essere riaperto nello stesso ciclo
+1. **Cross-decision:** If the same cycle has CLOSE and BUY/SHORT on the same coin, the entry is discarded
+2. **Intra-cycle:** If a coin is closed during the cycle, it cannot be reopened in the same cycle

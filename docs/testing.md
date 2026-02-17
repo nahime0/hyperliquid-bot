@@ -2,204 +2,204 @@
 
 ## Overview
 
-Il progetto usa **pytest** + **pytest-asyncio** per test unitari e di integrazione. Tutti i test async usano database SQLite in-memory (nessuna dipendenza esterna tranne `claude` CLI per i test di integrazione).
+The project uses **pytest** + **pytest-asyncio** for unit and integration tests. All async tests use in-memory SQLite databases (no external dependencies except `claude` CLI for integration tests).
 
-## Struttura
+## Structure
 
 ```
 tests/
-├── conftest.py                  # Fixtures condivise: settings, DB, positions, decisions
+├── conftest.py                  # Shared fixtures: settings, DB, positions, decisions
 ├── test_types.py                # Decision dataclass
 ├── test_settings.py             # AIConfig, RiskConfig, Settings, load_settings
-├── test_ai_advisor.py           # AIAdvisor: deferred tracking + CLI (mocked e reale)
+├── test_ai_advisor.py           # AIAdvisor: deferred tracking + CLI (mocked and real)
 ├── test_position_tracker.py     # PositionTracker: lifecycle, SL/TP, trailing, AI adjustments
 ├── test_risk_manager.py         # RiskManager: validation, kill switch, daily pause
-└── test_integration.py          # Test con chiamata reale al CLI claude
+└── test_integration.py          # Tests with real claude CLI calls
 ```
 
-## Esecuzione
+## Running
 
 ```bash
-# Solo test unitari (veloci, nessuna dipendenza esterna)
+# Unit tests only (fast, no external dependencies)
 .venv/bin/python -m pytest tests/ -m "not integration" -v
 
-# Solo test di integrazione (richiedono `claude` CLI)
+# Integration tests only (require `claude` CLI)
 .venv/bin/python -m pytest tests/ -m integration -v
 
-# Tutti i test
+# All tests
 .venv/bin/python -m pytest tests/ -v
 ```
 
-## Fixtures condivise (`conftest.py`)
+## Shared Fixtures (`conftest.py`)
 
-| Fixture | Tipo | Descrizione |
+| Fixture | Type | Description |
 |---|---|---|
-| `risk_config` | `RiskConfig` | Configurazione risk con valori di default |
-| `ai_config` | `AIConfig` | Configurazione AI con valori di default |
-| `settings` | `Settings` | Settings completo con default di test |
-| `db` | `Database` | SQLite in-memory, auto-connect/close |
-| `position_tracker` | `PositionTracker` | Tracker con DB in-memory e risk_config |
-| `sample_positions` | `list[dict]` | Posizioni aperte simulate (ETH LONG + BTC SHORT) |
-| `sample_opportunities` | `list[dict]` | Opportunita' di entry simulate |
-| `sample_account` | `dict` | Account mock con balance e equity |
-| `sample_decision_buy` | `Decision` | Decisione BUY SOL con SL/TP |
-| `sample_decision_short` | `Decision` | Decisione SHORT DOGE con SL/TP |
-| `sample_decision_close` | `Decision` | Decisione CLOSE ETH |
+| `risk_config` | `RiskConfig` | Risk configuration with default values |
+| `ai_config` | `AIConfig` | AI configuration with default values |
+| `settings` | `Settings` | Complete settings with test defaults |
+| `db` | `Database` | In-memory SQLite, auto-connect/close |
+| `position_tracker` | `PositionTracker` | Tracker with in-memory DB and risk_config |
+| `sample_positions` | `list[dict]` | Simulated open positions (ETH LONG + BTC SHORT) |
+| `sample_opportunities` | `list[dict]` | Simulated entry opportunities |
+| `sample_account` | `dict` | Mock account with balance and equity |
+| `sample_decision_buy` | `Decision` | BUY SOL decision with SL/TP |
+| `sample_decision_short` | `Decision` | SHORT DOGE decision with SL/TP |
+| `sample_decision_close` | `Decision` | CLOSE ETH decision |
 
-## Test per modulo
+## Tests by Module
 
-### `test_types.py` — Decision dataclass (7 test)
+### `test_types.py` — Decision dataclass (7 tests)
 
-Verifica il dataclass `Decision` in `core/types.py`:
+Verifies the `Decision` dataclass in `core/types.py`:
 
-- Campi obbligatori (`action`, `confidence`, `reasoning`) impostati correttamente
-- Campi opzionali (`symbol`, `size_pct`, `stop_loss`, etc.) default a `None`
-- Mutabilita': SL/TP modificabili dopo creazione (non frozen)
-- Tutte le azioni valide: BUY, SHORT, SELL, HOLD, CLOSE
-- Creazione con tutti i campi popolati
-- Limiti confidence (0.0 e 1.0)
+- Required fields (`action`, `confidence`, `reasoning`) set correctly
+- Optional fields (`symbol`, `size_pct`, `stop_loss`, etc.) default to `None`
+- Mutability: SL/TP modifiable after creation (not frozen)
+- All valid actions: BUY, SHORT, SELL, HOLD, CLOSE
+- Creation with all fields populated
+- Confidence limits (0.0 and 1.0)
 
-### `test_settings.py` — Configurazione (7 test)
+### `test_settings.py` — Configuration (7 tests)
 
-Verifica i dataclass di configurazione in `config/settings.py`:
+Verifies the configuration dataclasses in `config/settings.py`:
 
-- **AIConfig**: valori di default corretti (`model="opus"`, `timeout=120`, `decision_interval=60`)
-- **AIConfig**: non ha piu' campi legacy (`haiku_model`, `opus_model`, `anthropic_api_key`)
-- **AIConfig**: frozen (non modificabile dopo creazione)
-- **RiskConfig**: tutti i default verificati (SL 1%, TP 1.5%, max drawdown 15%, etc.)
+- **AIConfig**: correct default values (`model="opus"`, `timeout=120`, `decision_interval=60`)
+- **AIConfig**: no longer has legacy fields (`haiku_model`, `opus_model`, `anthropic_api_key`)
+- **AIConfig**: frozen (immutable after creation)
+- **RiskConfig**: all defaults verified (SL 1%, TP 1.5%, max drawdown 15%, etc.)
 - **RiskConfig**: frozen
 - **Settings**: frozen
-- **load_settings()**: carica correttamente da environment, ritorna `Settings` valido
+- **load_settings()**: correctly loads from environment, returns valid `Settings`
 
-### `test_ai_advisor.py` — AI Advisor (24 test)
+### `test_ai_advisor.py` — AI Advisor (24 tests)
 
-#### Deferred opportunity tracking (13 test, sync, no mock)
+#### Deferred opportunity tracking (13 tests, sync, no mock)
 
-Verifica il meccanismo di opportunita' differite in `core/ai_advisor.py`:
+Verifies the deferred opportunity mechanism in `core/ai_advisor.py`:
 
-- `defer()` aggiunge simbolo alla lista deferred
-- `defer()` sovrascrive condizioni se stesso simbolo
-- `remove_deferred()` rimuove correttamente
-- `remove_deferred()` su simbolo inesistente non solleva errori
-- `deferred_symbols` ritorna set completo
-- `check_deferred()` con `wait_cycles` non pronto (cicli insufficienti)
-- `check_deferred()` con `wait_cycles` pronto (cicli raggiunti, rimosso automaticamente)
-- `check_deferred()` con `wait_until_price_above` non pronto
-- `check_deferred()` con `wait_until_price_above` pronto
-- `check_deferred()` con `wait_until_price_below` pronto
-- `check_deferred()` senza condizioni: pronto immediatamente
-- `check_deferred()` con simboli multipli: solo quelli pronti ritornati
-- `set_cycle()` aggiorna contatore interno
+- `defer()` adds symbol to the deferred list
+- `defer()` overwrites conditions if same symbol
+- `remove_deferred()` removes correctly
+- `remove_deferred()` on non-existent symbol doesn't raise errors
+- `deferred_symbols` returns complete set
+- `check_deferred()` with `wait_cycles` not ready (insufficient cycles)
+- `check_deferred()` with `wait_cycles` ready (cycles reached, automatically removed)
+- `check_deferred()` with `wait_until_price_above` not ready
+- `check_deferred()` with `wait_until_price_above` ready
+- `check_deferred()` with `wait_until_price_below` ready
+- `check_deferred()` without conditions: ready immediately
+- `check_deferred()` with multiple symbols: only ready ones returned
+- `set_cycle()` updates internal counter
 
-#### CLI invocation mocked (11 test, async)
+#### CLI invocation mocked (11 tests, async)
 
-Verifica la chiamata CLI con subprocess mockato:
+Verifies CLI call with mocked subprocess:
 
-- Output JSON strutturato parsato correttamente (`structured_output`)
-- Timeout gestito: ritorna liste vuote
-- Errore CLI (returncode != 0): ritorna liste vuote
-- Output vuoto: ritorna liste vuote
-- JSON invalido: ritorna liste vuote
-- Chiamata con posizioni e opportunita' vuote
-- `recent_trades` incluso nel payload
-- Parsing campo `structured_output` (wrapper `claude --output-format json`)
-- Parsing campo `result` (dict diretto)
-- Parsing `result` come JSON string
-- Parsing dict raw (senza wrapper)
+- Structured JSON output parsed correctly (`structured_output`)
+- Timeout handled: returns empty lists
+- CLI error (returncode != 0): returns empty lists
+- Empty output: returns empty lists
+- Invalid JSON: returns empty lists
+- Call with empty positions and opportunities
+- `recent_trades` included in payload
+- Parsing `structured_output` field (`claude --output-format json` wrapper)
+- Parsing `result` field (direct dict)
+- Parsing `result` as JSON string
+- Parsing raw dict (without wrapper)
 
-### `test_position_tracker.py` — Position Tracker (30 test)
+### `test_position_tracker.py` — Position Tracker (30 tests)
 
-#### Lifecycle (9 test)
+#### Lifecycle (9 tests)
 
-- Apertura posizione LONG: ritorna ID, dati corretti in DB
-- Apertura posizione SHORT: direzione salvata
-- Apertura duplicata: solleva `ValueError`
-- Chiusura LONG con profitto: PnL positivo
-- Chiusura LONG con perdita: PnL negativo
-- Chiusura SHORT con profitto: PnL positivo (prezzo scende)
-- Chiusura SHORT con perdita: PnL negativo (prezzo sale)
-- Fee incluse: PnL netto negativo anche a break-even (fee taker 0.045%/leg)
-- Chiusura posizione inesistente: ritorna 0.0
+- Open LONG position: returns ID, correct data in DB
+- Open SHORT position: direction saved
+- Duplicate open: raises `ValueError`
+- Close LONG with profit: positive PnL
+- Close LONG with loss: negative PnL
+- Close SHORT with profit: positive PnL (price drops)
+- Close SHORT with loss: negative PnL (price rises)
+- Fees included: net PnL negative even at break-even (taker fee 0.045%/leg)
+- Close non-existent position: returns 0.0
 
-#### Query (5 test)
+#### Query (5 tests)
 
-- `get_open_positions()`: ritorna solo posizioni OPEN
-- `get_position_for_symbol()`: ritorna posizione specifica
-- `get_position_for_symbol()`: ritorna `None` se non esiste
-- `get_open_symbols()`: ritorna set di simboli con posizioni aperte
-- Posizione chiusa non appare in `get_open_positions()`
+- `get_open_positions()`: returns only OPEN positions
+- `get_position_for_symbol()`: returns specific position
+- `get_position_for_symbol()`: returns `None` if not found
+- `get_open_symbols()`: returns set of symbols with open positions
+- Closed position doesn't appear in `get_open_positions()`
 
-#### SL/TP checking (6 test)
+#### SL/TP checking (6 tests)
 
-Verifica `check_sl_tp()` direction-aware:
+Verifies direction-aware `check_sl_tp()`:
 
-- LONG SL hit: prezzo scende sotto stop loss
-- LONG TP hit: prezzo sale sopra take profit
-- SHORT SL hit: prezzo sale sopra stop loss
-- SHORT TP hit: prezzo scende sotto take profit
-- Nessun trigger: prezzo nel range
-- Prezzo mancante: posizione skippata
+- LONG SL hit: price drops below stop loss
+- LONG TP hit: price rises above take profit
+- SHORT SL hit: price rises above stop loss
+- SHORT TP hit: price drops below take profit
+- No trigger: price within range
+- Missing price: position skipped
 
-#### Trailing stop (6 test)
+#### Trailing stop (6 tests)
 
-Verifica trailing stop direction-aware:
+Verifies direction-aware trailing stop:
 
-- LONG breakeven: gain >= 1.0% → SL sale a entry
-- LONG trailing: gain >= 1.5% → SL segue a max - 1.0%
-- LONG tight: gain >= 2.5% → SL stringe a max - 0.75%
-- SHORT breakeven: gain >= 1.0% → SL scende a entry
-- LONG SL non scende mai (solo su)
-- SHORT SL non sale mai (solo giu')
+- LONG breakeven: gain >= 1.0% -> SL moves to entry
+- LONG trailing: gain >= 1.5% -> SL follows at max - 1.0%
+- LONG tight: gain >= 2.5% -> SL tightens to max - 0.75%
+- SHORT breakeven: gain >= 1.0% -> SL moves down to entry
+- LONG SL never falls (only rises)
+- SHORT SL never rises (only falls)
 
-#### AI adjustments (4 test)
+#### AI adjustments (4 tests)
 
-- `update_sl_tp()`: aggiorna entrambi SL e TP
-- `update_sl_tp()`: aggiorna solo SL, TP invariato
-- `update_sl_tp()`: senza argomenti, no-op
-- `update_leverage()`: aggiorna leverage in DB
+- `update_sl_tp()`: updates both SL and TP
+- `update_sl_tp()`: updates only SL, TP unchanged
+- `update_sl_tp()`: without arguments, no-op
+- `update_leverage()`: updates leverage in DB
 
-### `test_risk_manager.py` — Risk Manager (16 test)
+### `test_risk_manager.py` — Risk Manager (16 tests)
 
-Usa `MockClient` (nessuna chiamata reale a Hyperliquid).
+Uses `MockClient` (no real Hyperliquid calls).
 
-#### Validation (10 test)
+#### Validation (10 tests)
 
-- HOLD sempre approvato (pass-through)
-- BUY approvato: confidence sufficiente, size calcolato
-- Kill switch blocca tutto
-- Daily pause blocca BUY/SHORT, permette CLOSE
-- Max posizioni raggiunto: blocca nuove entry
-- Balance sotto minimo: blocca
-- Confidence troppo bassa (< 0.5): blocca
-- Posizione duplicata sullo stesso simbolo: blocca
-- Auto SL/TP per LONG: SL sotto prezzo, TP sopra
-- Auto SL/TP per SHORT: SL sopra prezzo, TP sotto
+- HOLD always approved (pass-through)
+- BUY approved: sufficient confidence, size calculated
+- Kill switch blocks everything
+- Daily pause blocks BUY/SHORT, allows CLOSE
+- Max positions reached: blocks new entries
+- Balance below minimum: blocks
+- Confidence too low (< 0.5): blocks
+- Duplicate position on same symbol: blocks
+- Auto SL/TP for LONG: SL below price, TP above
+- Auto SL/TP for SHORT: SL above price, TP below
 
-#### Kill switch e daily pause (5 test)
+#### Kill switch and daily pause (5 tests)
 
-- Drawdown 20% (> 15% max) → kill switch attivato
-- Balance 30 USDC (< 50 min) → kill switch attivato
-- Drawdown 10% (< 15%) → kill switch NON attivato
-- 5 perdite consecutive → kill switch attivato
-- Drawdown giornaliero 6% (> 5%) → daily pause attivato
+- 20% drawdown (> 15% max) -> kill switch activated
+- 30 USDC balance (< 50 min) -> kill switch activated
+- 10% drawdown (< 15%) -> kill switch NOT activated
+- 5 consecutive losses -> kill switch activated
+- 6% daily drawdown (> 5%) -> daily pause activated
 
 #### Risk metrics (1 test)
 
-- `get_risk_metrics()` ritorna tutte le chiavi attese con valori corretti
+- `get_risk_metrics()` returns all expected keys with correct values
 
-### `test_integration.py` — Integrazione (5 test)
+### `test_integration.py` — Integration (5 tests)
 
-Marcati `@pytest.mark.integration` — richiedono `claude` CLI installato.
+Marked `@pytest.mark.integration` — require `claude` CLI installed.
 
-- **Position review**: invia 1 posizione aperta → AI ritorna HOLD/CLOSE/ADJUST
-- **Opportunity review**: invia 1 opportunita' → AI ritorna BUY/SHORT/HOLD
-- **Mixed payload**: 1 posizione + 1 opportunita' → entrambi reviewed
-- **Schema validation**: risposta conforme alla struttura JSON schema
-- **Defer roundtrip**: defer con condizioni → `check_deferred()` ritorna pronto dopo condizioni soddisfatte
+- **Position review**: sends 1 open position -> AI returns HOLD/CLOSE/ADJUST
+- **Opportunity review**: sends 1 opportunity -> AI returns BUY/SHORT/HOLD
+- **Mixed payload**: 1 position + 1 opportunity -> both reviewed
+- **Schema validation**: response conforms to JSON schema structure
+- **Defer roundtrip**: defer with conditions -> `check_deferred()` returns ready after conditions met
 
-## Mock pattern
+## Mock Pattern
 
-### MockClient (per RiskManager)
+### MockClient (for RiskManager)
 
 ```python
 class MockClient:
@@ -209,7 +209,7 @@ class MockClient:
     async def update_leverage(self, coin, lev, is_cross=True): pass
 ```
 
-### Database in-memory
+### In-memory Database
 
 ```python
 @pytest_asyncio.fixture
@@ -220,7 +220,7 @@ async def db():
     await d.close()
 ```
 
-### Subprocess mock (per AIAdvisor CLI)
+### Subprocess mock (for AIAdvisor CLI)
 
 ```python
 proc = AsyncMock()
@@ -231,7 +231,7 @@ with patch("asyncio.create_subprocess_exec", return_value=proc):
     result = await advisor.consult(...)
 ```
 
-## Marker personalizzato
+## Custom Marker
 
 ```python
 # conftest.py
@@ -241,4 +241,4 @@ def pytest_configure(config):
     )
 ```
 
-Permette di filtrare con `-m integration` o `-m "not integration"`.
+Allows filtering with `-m integration` or `-m "not integration"`.
