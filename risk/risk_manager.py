@@ -634,10 +634,11 @@ class RiskManager:
         if self._kill_switch:
             return
 
-        dd = self._drawdown_pct()
-        if dd >= self._config.max_total_drawdown_pct:
-            await self._trigger_kill(f"Total drawdown {dd:.2f}% >= {self._config.max_total_drawdown_pct}%")
-            return
+        # Total drawdown kill switch disabled — rely on daily pause instead
+        # dd = self._drawdown_pct()
+        # if dd >= self._config.max_total_drawdown_pct:
+        #     await self._trigger_kill(f"Total drawdown {dd:.2f}% >= {self._config.max_total_drawdown_pct}%")
+        #     return
 
         if self._current_balance < self._config.min_balance_usdc:
             await self._trigger_kill(
@@ -662,11 +663,8 @@ class RiskManager:
         self._kill_reason = ""
 
     def _check_daily_pause(self) -> None:
-        dd = self._daily_drawdown_pct()
-        if dd >= self._config.max_daily_drawdown_pct and not self._daily_paused:
-            self._daily_paused = True
-            self._daily_pause_reason = f"Daily drawdown {dd:.2f}% >= {self._config.max_daily_drawdown_pct}%"
-            logger.warning("DAILY PAUSE: %s", self._daily_pause_reason)
+        # Daily pause disabled — rely on per-trade SL/TP instead
+        pass
 
     def _update_daily(self, balance: float) -> None:
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
