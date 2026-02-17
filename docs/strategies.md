@@ -1,37 +1,37 @@
-# Strategie di Trading
+# Trading Strategies
 
 ## Overview
 
-Il bot supporta due modalita' operative:
+The bot supports two operating modes:
 
-### Live Trading (bot principale — `main.py`)
+### Live Trading (main bot — `main.py`)
 
-Il bot live utilizza un **MultiStrategy aggregator** che combina decisioni indipendenti da piu' strategie:
+The live bot uses a **MultiStrategy aggregator** that combines independent decisions from multiple strategies:
 
-| Strategia Live | Timeframe | Classe | CLI flag |
+| Live Strategy | Timeframe | Class | CLI flag |
 |---|---|---|---|
 | **Mean Reversion** | 15m | `MeanReversionStrategy` | `--strategy mean_reversion` |
 | **RSI Divergence** | 5m | `RSIDivergenceStrategy` | `--strategy rsi_div` |
 | **Trend Following** | 1h | `TrendFollowingStrategy` | `--strategy trend_following` |
 | **Multi (default)** | 5m + 15m + 1h | `MultiStrategy` | `--strategy multi` |
 
-Il `MultiStrategy` merger:
-- Raccoglie Decision da ciascuna sub-strategia indipendentemente
-- Se 2+ strategie concordano su BUY/SHORT per lo stesso coin → boost confidence (+0.1)
-- Se strategie in conflitto (BUY vs SHORT sullo stesso coin) → il segnale con **score piu' alto** vince, con nota `[Conflict: ...]` nel reasoning per l'AI
-- Se solo 1 strategia segnala → usa confidence originale
-- Mai piu' di `max_open_positions` entry per ciclo
+The `MultiStrategy` merger:
+- Collects Decisions from each sub-strategy independently
+- If 2+ strategies agree on BUY/SHORT for the same coin -> boost confidence (+0.1)
+- If strategies conflict (BUY vs SHORT on the same coin) -> the signal with the **highest score** wins, with a `[Conflict: ...]` note in reasoning for the AI
+- If only 1 strategy signals -> uses original confidence
+- Never more than `max_open_positions` entries per cycle
 
-### Backtesting (9+ strategie — `scripts/backtest_runner.py`)
+### Backtesting (9+ strategies — `scripts/backtest_runner.py`)
 
-Il backtester supporta tutte le strategie originali con parameter sweep:
+The backtester supports all original strategies with parameter sweep:
 
-Strategie disponibili:
+Available strategies:
 
-| Strategia | Tipo | Classe backtest | CLI flag |
+| Strategy | Type | Backtest Class | CLI flag |
 |---|---|---|---|
 | **Mean Reversion** | Mean reversion | `HyperliquidMeanRevRule` | `hyperliquid_mr` |
-| **Scalp** | Mean reversion rilassata | `ScalpMeanRevRule` | `scalp` |
+| **Scalp** | Relaxed mean reversion | `ScalpMeanRevRule` | `scalp` |
 | **EMA Crossover + ADX** | Trend following | `EMACrossoverADXRule` | `ema_adx` |
 | **BB Squeeze** | Volatility breakout | `BBSqueezeRule` | `bb_squeeze` |
 | **MACD Momentum** | Momentum | `MACDMomentumRule` | `macd` |
@@ -40,198 +40,198 @@ Strategie disponibili:
 | **VWAP Reversion** | Intraday mean rev | `VWAPReversionRule` | `vwap_rev` |
 | **RSI Divergence** | Divergence reversal | `RSIDivergenceRule` | `rsi_div` |
 | **Stochastic Cross** | Oscillator cross | `StochasticCrossRule` | `stoch` |
-| **Combined** | Consenso multi-strategia | `CombinedRule` | `combined` |
+| **Combined** | Multi-strategy consensus | `CombinedRule` | `combined` |
 
-## Trend Filter (gate universale)
+## Trend Filter (universal gate)
 
-**Tutte** le strategie usano lo stesso trend filter 1h come quality gate:
+**All** strategies use the same 1h trend filter as a quality gate:
 
-| Trend | Condizioni |
+| Trend | Conditions |
 |---|---|
 | **BULLISH** | EMA50 > EMA200 AND price > EMA50 AND slope > 0 |
 | **BEARISH** | EMA50 < EMA200 AND price < EMA50 AND slope < 0 |
-| **NEUTRAL** | Tutto il resto |
+| **NEUTRAL** | Everything else |
 
-**Slope:** Variazione dell'EMA50 negli ultimi 5 barre, normalizzata per il prezzo (in percentuale).
+**Slope:** EMA50 change over the last 5 bars, normalized by price (as percentage).
 
-Utilizzo per strategia:
-- Strategie **direzionali** (EMA cross, MACD, Donchian, Keltner, Stochastic): LONG solo se BULLISH, SHORT solo se BEARISH
-- Strategie **mean reversion** (BB Squeeze, VWAP, RSI Div): LONG se BULLISH/NEUTRAL, SHORT se BEARISH/NEUTRAL
+Usage per strategy:
+- **Directional** strategies (EMA cross, MACD, Donchian, Keltner, Stochastic): LONG only if BULLISH, SHORT only if BEARISH
+- **Mean reversion** strategies (BB Squeeze, VWAP, RSI Div): LONG if BULLISH/NEUTRAL, SHORT if BEARISH/NEUTRAL
 
 ---
 
 ## Mean Reversion (`hyperliquid_mr`)
 
-### Indicatori
+### Indicators
 
-| Indicatore | Timeframe | Parametri | Utilizzo |
+| Indicator | Timeframe | Parameters | Usage |
 |---|---|---|---|
-| RSI | 15m | Periodo 14 | Entry/exit trigger |
-| RSI | 1h | Periodo 14 | Filtro macro |
-| Bollinger Bands | 15m | Periodo 20, 2 std dev | Conferma estremi |
-| Volume SMA | 15m | Periodo 20 | Conferma volume |
+| RSI | 15m | Period 14 | Entry/exit trigger |
+| RSI | 1h | Period 14 | Macro filter |
+| Bollinger Bands | 15m | Period 20, 2 std dev | Extreme confirmation |
+| Volume SMA | 15m | Period 20 | Volume confirmation |
 | EMA50 / EMA200 | 1h | - | Trend filter |
 
-### Condizioni LONG Entry
+### LONG Entry Conditions
 
 1. Trend BULLISH (1h)
 2. RSI(14) < 25
-3. Prezzo <= lower BB * 1.005
+3. Price <= lower BB * 1.005
 4. Volume ratio >= 1.2
 5. RSI 1h < 60
 
-### Condizioni SHORT Entry
+### SHORT Entry Conditions
 
 1. Trend BEARISH (1h)
 2. RSI(14) > 75
-3. Prezzo >= upper BB * 0.995
+3. Price >= upper BB * 0.995
 4. Volume ratio >= 1.2
 5. RSI 1h > 40
 
 ### Exit
 
-- **LONG exit:** RSI > 70 OR prezzo >= BB upper
-- **SHORT exit:** RSI < 30 OR prezzo <= BB lower
+- **LONG exit:** RSI > 70 OR price >= BB upper
+- **SHORT exit:** RSI < 30 OR price <= BB lower
 
 ---
 
 ## EMA Crossover + ADX (`ema_adx`)
 
-### Filosofia
+### Philosophy
 
-Trend following puro: segue i crossover delle EMA confermate dalla forza del trend (ADX).
+Pure trend following: follows EMA crossovers confirmed by trend strength (ADX).
 
-### Indicatori
+### Indicators
 
-| Indicatore | Parametri | Utilizzo |
+| Indicator | Parameters | Usage |
 |---|---|---|
-| EMA12 / EMA26 | Periodi 12, 26 | Crossover signal |
-| ADX | Periodo 14 | Conferma forza trend |
+| EMA12 / EMA26 | Periods 12, 26 | Crossover signal |
+| ADX | Period 14 | Trend strength confirmation |
 
-### Condizioni Entry
+### Entry Conditions
 
 - **LONG:** trend BULLISH + EMA12 crosses above EMA26 + ADX > 20
 - **SHORT:** trend BEARISH + EMA12 crosses below EMA26 + ADX > 20
 
 ### Exit
 
-- EMA cross opposto OR ADX < 15
+- Opposite EMA cross OR ADX < 15
 
 ---
 
 ## BB Squeeze (`bb_squeeze`)
 
-### Filosofia
+### Philosophy
 
-Identifica periodi di bassa volatilita' (squeeze) e opera il breakout quando la volatilita' esplode.
+Identifies low volatility periods (squeeze) and trades the breakout when volatility expands.
 
-### Indicatori
+### Indicators
 
-| Indicatore | Parametri | Utilizzo |
+| Indicator | Parameters | Usage |
 |---|---|---|
-| Bollinger Bands | Periodo 20, 2 std | Canale volatilita' |
-| BB Bandwidth | - | Detecta squeeze (< 2%) |
-| Volume SMA | Periodo 20 | Conferma volume breakout |
+| Bollinger Bands | Period 20, 2 std | Volatility channel |
+| BB Bandwidth | - | Squeeze detection (< 2%) |
+| Volume SMA | Period 20 | Breakout volume confirmation |
 
-### Condizioni Entry
+### Entry Conditions
 
-- **Squeeze detectata:** BB bandwidth < 2% per 3+ candele consecutive
-- **LONG:** trend BULLISH/NEUTRAL + squeeze + prezzo rompe BB upper + volume > 1.5x
-- **SHORT:** trend BEARISH/NEUTRAL + squeeze + prezzo rompe BB lower + volume > 1.5x
+- **Squeeze detected:** BB bandwidth < 2% for 3+ consecutive candles
+- **LONG:** trend BULLISH/NEUTRAL + squeeze + price breaks BB upper + volume > 1.5x
+- **SHORT:** trend BEARISH/NEUTRAL + squeeze + price breaks BB lower + volume > 1.5x
 
 ### Exit
 
-- Prezzo torna a BB mid OR bandwidth > 3%
+- Price returns to BB mid OR bandwidth > 3%
 
 ---
 
 ## MACD Momentum (`macd`)
 
-### Filosofia
+### Philosophy
 
-Cattura il momentum direzionale tramite crossover MACD con conferma dell'istogramma.
+Captures directional momentum through MACD crossovers with histogram confirmation.
 
-### Indicatori
+### Indicators
 
-| Indicatore | Parametri | Utilizzo |
+| Indicator | Parameters | Usage |
 |---|---|---|
 | MACD line | Fast 12, Slow 26 | Direction |
-| Signal line | Periodo 9 | Crossover trigger |
-| Histogram | MACD - Signal | Conferma momentum |
+| Signal line | Period 9 | Crossover trigger |
+| Histogram | MACD - Signal | Momentum confirmation |
 
-### Condizioni Entry
+### Entry Conditions
 
-- **LONG:** trend BULLISH + MACD > 0 + MACD crosses above signal + histogram crescente
-- **SHORT:** trend BEARISH + MACD < 0 + MACD crosses below signal + histogram decrescente
+- **LONG:** trend BULLISH + MACD > 0 + MACD crosses above signal + increasing histogram
+- **SHORT:** trend BEARISH + MACD < 0 + MACD crosses below signal + decreasing histogram
 
 ### Exit
 
-- MACD cross opposto OR zero-line cross
+- Opposite MACD cross OR zero-line cross
 
 ---
 
 ## Donchian Breakout (`donchian`)
 
-### Filosofia
+### Philosophy
 
-Classic channel breakout (Turtle trading style): opera la rottura dei massimi/minimi di periodo dopo consolidamento.
+Classic channel breakout (Turtle trading style): trades the break of period highs/lows after consolidation.
 
-### Indicatori
+### Indicators
 
-| Indicatore | Parametri | Utilizzo |
+| Indicator | Parameters | Usage |
 |---|---|---|
-| Donchian Channel | Periodo 20 | High/low/mid |
-| Consolidation range | 5 bar | Conferma range stretto |
-| Volume SMA | Periodo 20 | Conferma breakout |
+| Donchian Channel | Period 20 | High/low/mid |
+| Consolidation range | 5 bars | Tight range confirmation |
+| Volume SMA | Period 20 | Breakout confirmation |
 
-### Condizioni Entry
+### Entry Conditions
 
-- **LONG:** trend BULLISH + prezzo rompe 20-bar high + volume > 1.3x + consolidamento 5+ bar (range < 1.5%)
-- **SHORT:** trend BEARISH + prezzo rompe 20-bar low + volume > 1.3x + consolidamento 5+ bar
+- **LONG:** trend BULLISH + price breaks 20-bar high + volume > 1.3x + 5+ bar consolidation (range < 1.5%)
+- **SHORT:** trend BEARISH + price breaks 20-bar low + volume > 1.3x + 5+ bar consolidation
 
 ### Exit
 
-- Prezzo torna sotto Donchian mid
+- Price returns below Donchian mid
 
 ---
 
 ## Keltner Breakout (`keltner`)
 
-### Filosofia
+### Philosophy
 
-Breakout basato su ATR (Average True Range) — adattivo alla volatilita' corrente.
+ATR-based (Average True Range) breakout — adaptive to current volatility.
 
-### Indicatori
+### Indicators
 
-| Indicatore | Parametri | Utilizzo |
+| Indicator | Parameters | Usage |
 |---|---|---|
-| Keltner Channel | EMA20 +/- 2*ATR | Canale adattivo |
-| Volume SMA | Periodo 20 | Conferma breakout |
+| Keltner Channel | EMA20 +/- 2*ATR | Adaptive channel |
+| Volume SMA | Period 20 | Breakout confirmation |
 
-### Condizioni Entry
+### Entry Conditions
 
-- **LONG:** trend BULLISH + prezzo rompe Keltner upper + volume > 1.2x
-- **SHORT:** trend BEARISH + prezzo rompe Keltner lower + volume > 1.2x
+- **LONG:** trend BULLISH + price breaks Keltner upper + volume > 1.2x
+- **SHORT:** trend BEARISH + price breaks Keltner lower + volume > 1.2x
 
 ### Exit
 
-- Prezzo torna sotto Keltner mid
+- Price returns below Keltner mid
 
 ---
 
 ## VWAP Reversion (`vwap_rev`)
 
-### Filosofia
+### Philosophy
 
-Mean reversion intraday attorno al VWAP (Volume Weighted Average Price). Cerca deviazioni estreme rispetto al prezzo medio pesato per volume.
+Intraday mean reversion around VWAP (Volume Weighted Average Price). Looks for extreme deviations from the volume-weighted average price.
 
-### Indicatori
+### Indicators
 
-| Indicatore | Parametri | Utilizzo |
+| Indicator | Parameters | Usage |
 |---|---|---|
-| VWAP | Rolling 96 bar (sessione) | Prezzo medio fair value |
-| ATR | Periodo 14 | Misura deviazione |
-| RSI | Periodo 14 | Conferma oversold/overbought |
+| VWAP | Rolling 96 bars (session) | Fair value average price |
+| ATR | Period 14 | Deviation measure |
+| RSI | Period 14 | Oversold/overbought confirmation |
 
 ### VWAP Calculation
 
@@ -240,178 +240,178 @@ hlc3 = (high + low + close) / 3
 VWAP = cumsum(volume * hlc3) / cumsum(volume)  # rolling window
 ```
 
-### Condizioni Entry
+### Entry Conditions
 
-- **LONG:** trend BULLISH/NEUTRAL + prezzo < VWAP - 2*ATR + RSI < 35
-- **SHORT:** trend BEARISH/NEUTRAL + prezzo > VWAP + 2*ATR + RSI > 65
+- **LONG:** trend BULLISH/NEUTRAL + price < VWAP - 2*ATR + RSI < 35
+- **SHORT:** trend BEARISH/NEUTRAL + price > VWAP + 2*ATR + RSI > 65
 
 ### Exit
 
-- Prezzo torna al VWAP OR RSI si normalizza (> 50 per long, < 50 per short)
+- Price returns to VWAP OR RSI normalizes (> 50 for long, < 50 for short)
 
 ---
 
 ## RSI Divergence (`rsi_div`)
 
-### Filosofia
+### Philosophy
 
-Identifica divergenze tra prezzo e RSI (swing detection). Una divergenza bullish indica che la pressione ribassista si sta esaurendo; una bearish il contrario. **Top performer nel backtest**: +$47, 61% WR, 34/35 coin profittevoli.
+Identifies divergences between price and RSI (swing detection). A bullish divergence indicates that bearish pressure is exhausting; a bearish one indicates the opposite. **Top performer in backtesting**: +$47, 61% WR, 34/35 coins profitable.
 
-### Indicatori
+### Indicators
 
-| Indicatore | Parametri | Utilizzo |
+| Indicator | Parameters | Usage |
 |---|---|---|
-| RSI | Periodo 14 (configurabile) | Divergence detection |
-| Swing detection | Finestra 5 bar (configurabile) | Identifica pivot points |
+| RSI | Period 14 (configurable) | Divergence detection |
+| Swing detection | Window 5 bars (configurable) | Identifies pivot points |
 
-### Condizioni Entry
+### Entry Conditions
 
-- **Bullish divergence (LONG):** trend BULLISH/NEUTRAL + prezzo fa lower low + RSI fa higher low
-- **Bearish divergence (SHORT):** trend BEARISH/NEUTRAL + prezzo fa higher high + RSI fa lower high
+- **Bullish divergence (LONG):** trend BULLISH/NEUTRAL + price makes lower low + RSI makes higher low
+- **Bearish divergence (SHORT):** trend BEARISH/NEUTRAL + price makes higher high + RSI makes lower high
 
 ### Exit
 
-- RSI > 60 (long exit, configurabile: `RSI_DIV_LONG_EXIT`) OR RSI < 40 (short exit, configurabile: `RSI_DIV_SHORT_EXIT`)
+- RSI > 60 (long exit, configurable: `RSI_DIV_LONG_EXIT`) OR RSI < 40 (short exit, configurable: `RSI_DIV_SHORT_EXIT`)
 
-### Parametri configurabili (`.env`)
+### Configurable Parameters (`.env`)
 
-| Variabile | Default | Descrizione |
+| Variable | Default | Description |
 |---|---|---|
-| `RSI_DIV_PERIOD` | 14 | Periodo RSI |
-| `RSI_DIV_SWING_WINDOW` | 5 | Finestra swing detection (2*w+1 barre) |
-| `RSI_DIV_LONG_EXIT` | 60.0 | RSI threshold per exit LONG |
-| `RSI_DIV_SHORT_EXIT` | 40.0 | RSI threshold per exit SHORT |
-| `PRIMARY_INTERVAL` | 5m | Timeframe primario per RSI Div |
+| `RSI_DIV_PERIOD` | 14 | RSI period |
+| `RSI_DIV_SWING_WINDOW` | 5 | Swing detection window (2*w+1 bars) |
+| `RSI_DIV_LONG_EXIT` | 60.0 | RSI threshold for LONG exit |
+| `RSI_DIV_SHORT_EXIT` | 40.0 | RSI threshold for SHORT exit |
+| `PRIMARY_INTERVAL` | 5m | Primary timeframe for RSI Div |
 
 ### Live vs Backtest
 
-- **Live** (`strategies/rsi_divergence.py`): `RSIDivergenceStrategy(Strategy)` — opera su candele 5m in real-time via WebSocket
-- **Backtest** (`data/backtest.py`): `RSIDivergenceRule(TradingRule)` — stessa logica su dati storici
+- **Live** (`strategies/rsi_divergence.py`): `RSIDivergenceStrategy(Strategy)` — operates on 5m candles in real-time via WebSocket
+- **Backtest** (`data/backtest.py`): `RSIDivergenceRule(TradingRule)` — same logic on historical data
 - **Parameter sweep**: `.venv/bin/python -m scripts.backtest_runner --sweep --strategy rsi_div`
 
 ---
 
 ## Trend Following (`trend_following`) — LIVE
 
-### Filosofia
+### Philosophy
 
-Cattura movimenti direzionali forti. Complementare a Mean Reversion: MR cerca rimbalzi (counter-trend), TF segue il trend (trend-following). In un downtrend forte (BTC -3.5%), MR non puo' shortare (RSI non raggiunge livelli overbought), ma TF si'.
+Captures strong directional moves. Complementary to Mean Reversion: MR looks for bounces (counter-trend), TF follows the trend (trend-following). In a strong downtrend (BTC -3.5%), MR can't short (RSI doesn't reach overbought levels), but TF can.
 
-### Indicatori
+### Indicators
 
-| Indicatore | Timeframe | Parametri | Utilizzo |
+| Indicator | Timeframe | Parameters | Usage |
 |---|---|---|---|
-| Price change 4h | 1h (4 candele) | Threshold 3% | Entry trigger principale |
-| EMA50 / EMA200 | 1h | TrendFilter | Trend 1h |
-| EMA12 / EMA26 | 1h | Slope 5 barre | Trend 4h |
-| Volume SMA | 1h | Periodo 20 | Conferma volume |
+| Price change 4h | 1h (4 candles) | Threshold 3% | Primary entry trigger |
+| EMA50 / EMA200 | 1h | TrendFilter | 1h trend |
+| EMA12 / EMA26 | 1h | Slope 5 bars | 4h trend |
+| Volume SMA | 1h | Period 20 | Volume confirmation |
 
-### Scoring SHORT Entry
+### SHORT Entry Scoring
 
-| Componente | Peso | Condizione |
+| Component | Weight | Condition |
 |---|---|---|
-| Variazione 4h | +0.30 | change_4h < -3% |
-| Trend 1h BEARISH | +0.20 | EMA50 < EMA200, price < EMA50, slope < 0 |
-| Trend 4h BEARISH | +0.20 | EMA12 < EMA26, price < EMA12, slope < 0 |
+| 4h change | +0.30 | change_4h < -3% |
+| 1h trend BEARISH | +0.20 | EMA50 < EMA200, price < EMA50, slope < 0 |
+| 4h trend BEARISH | +0.20 | EMA12 < EMA26, price < EMA12, slope < 0 |
 | Volume ratio | +0.10 | volume_ratio >= 1.0 |
 | Funding rate ok | +0.10 | \|funding\| < 0.05% |
-| No cooldown | +0.10 | Nessun cooldown attivo |
+| No cooldown | +0.10 | No active cooldown |
 
-Threshold >= 0.50. I 3 criteri principali (change + trend_1h + trend_4h) = 0.70.
+Threshold >= 0.50. The 3 main criteria (change + trend_1h + trend_4h) = 0.70.
 
-### Scoring LONG Entry (specchiato)
+### LONG Entry Scoring (mirrored)
 
-change_4h > +3%, trend BULLISH su 1h e 4h.
+change_4h > +3%, BULLISH trend on 1h and 4h.
 
 ### Hard Blocks
 
-Identici a Mean Reversion:
+Identical to Mean Reversion:
 - \|funding\| >= 0.001 (extreme funding)
-- Global cooldown attivo
-- Cooldown fresco < 10 min
+- Global cooldown active
+- Fresh cooldown < 10 min
 
 ### Exit
 
-- SHORT exit: trend_1h diventa BULLISH **oppure** trend_4h diventa BULLISH
-- LONG exit: trend_1h diventa BEARISH **oppure** trend_4h diventa BEARISH
+- SHORT exit: trend_1h becomes BULLISH **or** trend_4h becomes BULLISH
+- LONG exit: trend_1h becomes BEARISH **or** trend_4h becomes BEARISH
 
-### Parametri configurabili (`.env`)
+### Configurable Parameters (`.env`)
 
-| Variabile | Default | Descrizione |
+| Variable | Default | Description |
 |---|---|---|
-| `TF_CHANGE_THRESHOLD` | 3.0 | % minima di variazione 4h per trigger |
+| `TF_CHANGE_THRESHOLD` | 3.0 | Minimum 4h change % for trigger |
 
-### 4h data senza WebSocket aggiuntivo
+### 4h Data Without Additional WebSocket
 
-Il 4h change e il 4h trend vengono calcolati dalle candele 1h gia' disponibili:
+The 4h change and 4h trend are calculated from the already available 1h candles:
 - `change_4h = (close[-1] - close[-5]) / close[-5] * 100`
-- `trend_4h` = EMA12/EMA26 su 1h close (stessa logica di `_get_market_context`)
+- `trend_4h` = EMA12/EMA26 on 1h close (same logic as `_get_market_context`)
 
 ---
 
-## Gestione Conflitti Multi-Strategy
+## Multi-Strategy Conflict Management
 
-Quando strategie diverse generano segnali opposti sullo stesso coin:
+When different strategies generate opposite signals on the same coin:
 
-| Scenario | Comportamento |
+| Scenario | Behavior |
 |---|---|
-| MR BUY + TF SHORT (score piu' alto) | TF SHORT va all'AI con nota conflitto |
-| MR BUY (score piu' alto) + TF SHORT | MR BUY va all'AI con nota conflitto |
-| MR SHORT + TF SHORT (concordano) | Boost +0.10 sulla confidence migliore |
-| Solo una strategia segnala | Nessun cambiamento |
+| MR BUY + TF SHORT (higher score) | TF SHORT goes to AI with conflict note |
+| MR BUY (higher score) + TF SHORT | MR BUY goes to AI with conflict note |
+| MR SHORT + TF SHORT (agree) | Boost +0.10 on the best confidence |
+| Only one strategy signals | No change |
 
-L'AI riceve la nota `[Conflict: trend_following SHORT wins over mean_reversion BUY (0.55)]` e valuta se il trend continuera' o il rimbalzo e' piu' probabile.
+The AI receives the note `[Conflict: trend_following SHORT wins over mean_reversion BUY (0.55)]` and evaluates whether the trend will continue or a bounce is more likely.
 
 ---
 
 ## Stochastic Cross (`stoch`)
 
-### Filosofia
+### Philosophy
 
-Classico oscillatore stocastico: crossover %K/%D nelle zone estreme.
+Classic stochastic oscillator: %K/%D crossover in extreme zones.
 
-### Indicatori
+### Indicators
 
-| Indicatore | Parametri | Utilizzo |
+| Indicator | Parameters | Usage |
 |---|---|---|
-| Stochastic %K | Periodo 14 | Fast line |
+| Stochastic %K | Period 14 | Fast line |
 | Stochastic %D | Smooth 3 | Signal line |
 
-### Condizioni Entry
+### Entry Conditions
 
-- **LONG:** trend BULLISH + %K e %D < 20 (oversold) + %K crosses above %D
-- **SHORT:** trend BEARISH + %K e %D > 80 (overbought) + %K crosses below %D
+- **LONG:** trend BULLISH + %K and %D < 20 (oversold) + %K crosses above %D
+- **SHORT:** trend BEARISH + %K and %D > 80 (overbought) + %K crosses below %D
 
 ### Exit
 
-- Cross opposto OR zona opposta raggiunta (overbought per long, oversold per short)
+- Opposite cross OR opposite zone reached (overbought for long, oversold for short)
 
 ---
 
 ## Combined Strategy (`combined`)
 
-### Filosofia
+### Philosophy
 
-Sistema di **voting a consenso** che aggrega segnali da tutte le strategie. Entry conservativi (richiede 2+ voti concordi), exit aggressivi (qualsiasi segnale di exit).
+**Consensus voting** system that aggregates signals from all strategies. Conservative entries (requires 2+ concurrent votes), aggressive exits (any exit signal).
 
-### Meccanismo
+### Mechanism
 
 ```
-Per ogni candela:
-  1. Raccoglie segnali da tutte le sub-strategie
-  2. Conta voti BUY, SHORT, SELL, CLOSE_SHORT
-  3. Entry: se voti_BUY >= threshold -> BUY
-           se voti_SHORT >= threshold -> SHORT
-  4. Exit: se QUALSIASI strategia vota SELL -> SELL (conservativo)
-          se QUALSIASI strategia vota CLOSE_SHORT -> CLOSE_SHORT
+For each candle:
+  1. Collect signals from all sub-strategies
+  2. Count votes BUY, SHORT, SELL, CLOSE_SHORT
+  3. Entry: if votes_BUY >= threshold -> BUY
+           if votes_SHORT >= threshold -> SHORT
+  4. Exit: if ANY strategy votes SELL -> SELL (conservative)
+          if ANY strategy votes CLOSE_SHORT -> CLOSE_SHORT
 ```
 
-### Parametri
+### Parameters
 
-| Parametro | Default | Descrizione |
+| Parameter | Default | Description |
 |---|---|---|
-| `entry_threshold` | 2 | Numero minimo di strategie che devono concordare per entry |
-| Sub-strategies | Tutte 9 | Lista di strategie incluse nel voto |
+| `entry_threshold` | 2 | Minimum number of strategies that must agree for entry |
+| Sub-strategies | All 9 | List of strategies included in voting |
 
 ### CLI
 
@@ -419,44 +419,44 @@ Per ogni candela:
 # Default (threshold 2)
 .venv/bin/python -m scripts.backtest_runner --strategy combined
 
-# Threshold 3 (piu' conservativo)
+# Threshold 3 (more conservative)
 .venv/bin/python -m scripts.backtest_runner --strategy combined --combined-threshold 3
 
 # Sweep threshold 2/3/4
 .venv/bin/python -m scripts.backtest_runner --sweep --strategy combined
 ```
 
-### Trade-off threshold
+### Threshold Trade-off
 
-| Threshold | Frequenza trade | Qualita' segnale |
+| Threshold | Trade Frequency | Signal Quality |
 |---|---|---|
-| 2 | Alta | Media |
-| 3 | Media | Alta |
-| 4 | Bassa | Molto alta |
+| 2 | High | Medium |
+| 3 | Medium | High |
+| 4 | Low | Very high |
 
 ---
 
 ## Cooldown (`strategies/cooldown.py`)
 
-### Per-symbol cooldown
+### Per-symbol Cooldown
 
-Dopo una perdita su un coin, il trading su quel coin e' bloccato per 30 minuti (configurabile: `SYMBOL_COOLDOWN_SEC`).
+After a loss on a coin, trading on that coin is blocked for 30 minutes (configurable: `SYMBOL_COOLDOWN_SEC`).
 
-### Global cooldown
+### Global Cooldown
 
-Dopo 3 perdite consecutive (configurabile: `GLOBAL_COOLDOWN_LOSSES`), il trading su tutti i coin e' bloccato per 15 minuti (configurabile: `GLOBAL_COOLDOWN_SEC`).
+After 3 consecutive losses (configurable: `GLOBAL_COOLDOWN_LOSSES`), trading on all coins is blocked for 15 minutes (configurable: `GLOBAL_COOLDOWN_SEC`).
 
 ## Funding Rate Check
 
-Prima di ogni entry (LONG o SHORT), il bot verifica che il funding rate del coin non sia troppo alto:
+Before every entry (LONG or SHORT), the bot verifies that the coin's funding rate is not too high:
 
 ```python
 abs(funding_rate) < max_funding_rate  # default 0.0005 (0.05%/8h)
 ```
 
-## Indicatori tecnici
+## Technical Indicators
 
-La libreria `ta` (0.11.0) viene usata per tutti gli indicatori:
+The `ta` library (0.11.0) is used for all indicators:
 
 ```python
 # RSI
@@ -487,4 +487,4 @@ ta.momentum.StochasticOscillator(high, low, close, window=14, smooth_window=3)
 ta.volatility.AverageTrueRange(high, low, close, window=14)
 ```
 
-Nota: `pandas-ta` non e' utilizzabile perche' richiede `numba` che non supporta Python 3.14.
+Note: `pandas-ta` is not usable because it requires `numba` which doesn't support Python 3.14.

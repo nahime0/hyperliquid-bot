@@ -2,103 +2,103 @@
 
 ## Overview
 
-Il bot usa **SQLite** (via `aiosqlite`) per persistenza asincrona. Il database si trova di default in `data/trading_bot.db`.
+The bot uses **SQLite** (via `aiosqlite`) for asynchronous persistence. The database is located by default at `data/trading_bot.db`.
 
-WAL mode e' abilitato per permettere letture concorrenti (Next.js dashboard via `better-sqlite3` + bot).
+WAL mode is enabled to allow concurrent reads (Next.js dashboard via `better-sqlite3` + bot).
 
 ## Schema
 
-### `trades` — Storico operazioni
+### `trades` — Trade History
 
-| Colonna | Tipo | Descrizione |
+| Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PK | Auto-increment |
 | `timestamp` | TEXT | UTC ISO-8601 |
-| `symbol` | TEXT | Coin (es. ETH, BTC) |
+| `symbol` | TEXT | Coin (e.g. ETH, BTC) |
 | `side` | TEXT | BUY, SHORT, SELL, CLOSE |
-| `price` | REAL | Prezzo di esecuzione |
-| `quantity` | REAL | Quantita' |
-| `fee` | REAL | Commissione pagata |
-| `fee_asset` | TEXT | Asset della fee (default: USDC) |
-| `pnl` | REAL | Profitto/perdita netto (NULL se non calcolabile) |
+| `price` | REAL | Execution price |
+| `quantity` | REAL | Quantity |
+| `fee` | REAL | Fee paid |
+| `fee_asset` | TEXT | Fee asset (default: USDC) |
+| `pnl` | REAL | Net profit/loss (NULL if not calculable) |
 | `strategy` | TEXT | mean_reversion, ai |
-| `order_id` | TEXT | ID ordine Hyperliquid |
-| `notes` | TEXT | Note aggiuntive (es. [PAPER]) |
-| `direction` | TEXT | LONG o SHORT (default: LONG) |
+| `order_id` | TEXT | Hyperliquid order ID |
+| `notes` | TEXT | Additional notes (e.g. [PAPER]) |
+| `direction` | TEXT | LONG or SHORT (default: LONG) |
 
-### `positions` — Posizioni aperte/chiuse
+### `positions` — Open/Closed Positions
 
-| Colonna | Tipo | Descrizione |
+| Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PK | Auto-increment |
 | `symbol` | TEXT | Coin |
-| `entry_price` | REAL | Prezzo di entrata |
-| `exit_price` | REAL | Prezzo di uscita (NULL se aperta) |
-| `quantity` | REAL | Quantita' |
-| `stop_loss` | REAL | Stop loss corrente |
+| `entry_price` | REAL | Entry price |
+| `exit_price` | REAL | Exit price (NULL if open) |
+| `quantity` | REAL | Quantity |
+| `stop_loss` | REAL | Current stop loss |
 | `take_profit` | REAL | Take profit |
-| `trailing_sl` | REAL | Trailing stop loss (aggiornato dinamicamente) |
-| `original_sl` | REAL | SL originale (prima del trailing) |
-| `max_price_seen` | REAL | Prezzo massimo visto (per trailing LONG) |
-| `min_price_seen` | REAL | Prezzo minimo visto (per trailing SHORT) |
-| `strategy` | TEXT | Strategia che ha aperto la posizione |
-| `status` | TEXT | OPEN o CLOSED |
-| `pnl` | REAL | PnL netto (calcolato alla chiusura) |
-| `close_reason` | TEXT | Motivo chiusura (stop_loss, take_profit, trailing_sl, time_stop, strategy_exit) |
-| `opened_at` | TEXT | Timestamp apertura (UTC) |
-| `closed_at` | TEXT | Timestamp chiusura (UTC) |
-| `direction` | TEXT | LONG o SHORT (default: LONG) |
-| `leverage` | INTEGER | Leva utilizzata (default: 1) |
-| `liquidation_price` | REAL | Prezzo di liquidazione |
-| `funding_paid` | REAL | Funding pagato (default: 0) |
-| `ask_close` | INTEGER | 1 se richiesta chiusura manuale dalla webapp (default: 0) |
+| `trailing_sl` | REAL | Trailing stop loss (dynamically updated) |
+| `original_sl` | REAL | Original SL (before trailing) |
+| `max_price_seen` | REAL | Maximum price seen (for LONG trailing) |
+| `min_price_seen` | REAL | Minimum price seen (for SHORT trailing) |
+| `strategy` | TEXT | Strategy that opened the position |
+| `status` | TEXT | OPEN or CLOSED |
+| `pnl` | REAL | Net PnL (calculated at close) |
+| `close_reason` | TEXT | Close reason (stop_loss, take_profit, trailing_sl, time_stop, strategy_exit) |
+| `opened_at` | TEXT | Open timestamp (UTC) |
+| `closed_at` | TEXT | Close timestamp (UTC) |
+| `direction` | TEXT | LONG or SHORT (default: LONG) |
+| `leverage` | INTEGER | Leverage used (default: 1) |
+| `liquidation_price` | REAL | Liquidation price |
+| `funding_paid` | REAL | Funding paid (default: 0) |
+| `ask_close` | INTEGER | 1 if manual close requested from webapp (default: 0) |
 
-### `balance_snapshots` — Storico bilancio
+### `balance_snapshots` — Balance History
 
-| Colonna | Tipo | Descrizione |
+| Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PK | Auto-increment |
 | `timestamp` | TEXT | UTC ISO-8601 |
-| `total_usdc` | REAL | Balance totale in USDC |
-| `positions` | TEXT | JSON con posizioni aperte |
-| `peak_balance` | REAL | Massimo storico del balance |
+| `total_usdc` | REAL | Total balance in USDC |
+| `positions` | TEXT | JSON with open positions |
+| `peak_balance` | REAL | Historical balance peak |
 
-### `orders` — Ordini piazzati
+### `orders` — Placed Orders
 
-| Colonna | Tipo | Descrizione |
+| Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PK | Auto-increment |
-| `order_id` | TEXT UNIQUE | ID ordine Hyperliquid |
+| `order_id` | TEXT UNIQUE | Hyperliquid order ID |
 | `timestamp` | TEXT | UTC ISO-8601 |
 | `symbol` | TEXT | Coin |
-| `side` | TEXT | BUY o SELL |
-| `order_type` | TEXT | LIMIT o MARKET |
-| `price` | REAL | Prezzo ordine |
-| `quantity` | REAL | Quantita' |
+| `side` | TEXT | BUY or SELL |
+| `order_type` | TEXT | LIMIT or MARKET |
+| `price` | REAL | Order price |
+| `quantity` | REAL | Quantity |
 | `status` | TEXT | NEW, PARTIALLY_FILLED, FILLED, CANCELED |
-| `strategy` | TEXT | Strategia |
-| `filled_price` | REAL | Prezzo effettivo |
-| `filled_quantity` | REAL | Quantita' eseguita |
+| `strategy` | TEXT | Strategy |
+| `filled_price` | REAL | Actual fill price |
+| `filled_quantity` | REAL | Executed quantity |
 
-### `ai_decisions` — Storico decisioni AI
+### `ai_decisions` — AI Decision History
 
-| Colonna | Tipo | Descrizione |
+| Column | Type | Description |
 |---|---|---|
 | `id` | INTEGER PK | Auto-increment |
 | `timestamp` | TEXT | UTC ISO-8601 |
-| `snapshot_hash` | TEXT | Hash SHA-256 dello snapshot (dedup) |
+| `snapshot_hash` | TEXT | SHA-256 hash of snapshot (dedup) |
 | `action` | TEXT | BUY, SHORT, SELL, HOLD, CLOSE |
-| `symbol` | TEXT | Coin target |
-| `confidence` | REAL | Confidenza 0-1 |
-| `reasoning` | TEXT | Motivazione dell'AI |
-| `raw_response` | TEXT | JSON completo della risposta |
-| `executed` | INTEGER | 1 se l'ordine e' stato eseguito |
+| `symbol` | TEXT | Target coin |
+| `confidence` | REAL | Confidence 0-1 |
+| `reasoning` | TEXT | AI reasoning |
+| `raw_response` | TEXT | Full JSON response |
+| `executed` | INTEGER | 1 if the order was executed |
 | `tier` | TEXT | prescreen, haiku, opus, fallback |
-| `cost_usd` | REAL | Costo stimato della chiamata API |
+| `cost_usd` | REAL | Estimated API call cost |
 
-## Migrazioni
+## Migrations
 
-Le migrazioni vengono applicate automaticamente all'avvio tramite `ALTER TABLE ... ADD COLUMN`:
+Migrations are applied automatically at startup via `ALTER TABLE ... ADD COLUMN`:
 
 ```python
 _MIGRATIONS = [
@@ -118,41 +118,41 @@ _MIGRATIONS = [
 ]
 ```
 
-Le migrazioni sono idempotenti (il `try/except` ignora colonne gia' esistenti).
+Migrations are idempotent (the `try/except` ignores already existing columns).
 
 ## Backward Compatibility
 
-I vecchi record Binance hanno `symbol='ETHUSDC'`, i nuovi Hyperliquid hanno `symbol='ETH'`. Sono distinguibili e non conflittuano. Per pulire i vecchi dati:
+Old Binance records have `symbol='ETHUSDC'`, new Hyperliquid ones have `symbol='ETH'`. They are distinguishable and don't conflict. To clean up old data:
 
 ```sql
 DELETE FROM positions WHERE symbol LIKE '%USDC';
 DELETE FROM trades WHERE symbol LIKE '%USDC';
 ```
 
-## Query principali usate dal bot
+## Main Queries Used by the Bot
 
 ```sql
--- Ultimi 50 trade
+-- Last 50 trades
 SELECT * FROM trades ORDER BY id DESC LIMIT 50
 
--- Trade stats (ultimi 100 con PnL)
+-- Trade stats (last 100 with PnL)
 SELECT pnl FROM trades WHERE pnl IS NOT NULL ORDER BY id DESC LIMIT 100
 
--- Posizioni aperte
+-- Open positions
 SELECT * FROM positions WHERE status = 'OPEN' ORDER BY id
 
--- Ultimo balance snapshot
+-- Last balance snapshot
 SELECT * FROM balance_snapshots ORDER BY id DESC LIMIT 1
 
--- Costi AI per tier
+-- AI costs by tier
 SELECT tier, COUNT(*) as cnt, COALESCE(SUM(cost_usd), 0) as total
 FROM ai_decisions GROUP BY tier
 ```
 
-## Dashboard queries
+## Dashboard Queries
 
-La dashboard Next.js (`web/`) legge il DB in read-only (WAL mode) tramite `better-sqlite3`. I dati vengono aggiornati automaticamente via SWR polling lato client.
+The Next.js dashboard (`web/`) reads the DB in read-only mode (WAL mode) via `better-sqlite3`. Data is refreshed automatically via client-side SWR polling.
 
-### Chiusura manuale (ask_close)
+### Manual Close (ask_close)
 
-La dashboard puo' richiedere la chiusura di una posizione tramite `POST /api/positions/close` con `{ "position_id": N }`. Questo setta `ask_close = 1` sulla posizione tramite una connessione DB scrivibile separata (`getWriteDb()`). Il bot controlla ogni ~20 secondi (nel monitor SL/TP) le posizioni con `ask_close = 1` e le chiude al prezzo corrente di mercato. L'evento viene loggato come `MANUAL_CLOSE` con source `webapp`.
+The dashboard can request a position close via `POST /api/positions/close` with `{ "position_id": N }`. This sets `ask_close = 1` on the position through a separate writable DB connection (`getWriteDb()`). The bot checks every ~20 seconds (in the SL/TP monitor) for positions with `ask_close = 1` and closes them at the current market price. The event is logged as `MANUAL_CLOSE` with source `webapp`.

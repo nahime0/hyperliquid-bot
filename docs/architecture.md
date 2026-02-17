@@ -1,139 +1,139 @@
-# Architettura del Sistema
+# System Architecture
 
-## Panoramica
+## Overview
 
-Il bot e' un'applicazione Python asincrona (`asyncio`) che opera come loop continuo su Hyperliquid Perpetual Futures. Ogni ciclo (60s di default) attraversa le fasi: raccolta dati, analisi, generazione decisioni, validazione, esecuzione.
+The bot is an asynchronous Python application (`asyncio`) that runs as a continuous loop on Hyperliquid Perpetual Futures. Each cycle (60s by default) goes through the phases: data collection, analysis, decision generation, validation, execution.
 
-## Componenti principali
+## Main Components
 
 ### 1. HyperliquidClient (`core/client.py`)
 
-Wrapper asincrono attorno al SDK sincrono di Hyperliquid. Tutte le chiamate SDK vengono wrappate con `asyncio.to_thread()` per non bloccare l'event loop.
+Async wrapper around the synchronous Hyperliquid SDK. All SDK calls are wrapped with `asyncio.to_thread()` to avoid blocking the event loop.
 
-**Classi SDK utilizzate:**
-- `Info(api_url, skip_ws=True)` — dati read-only (prezzi, candles, stato account)
-- `Exchange(private_key, api_url, account_address)` — operazioni di trading
+**SDK classes used:**
+- `Info(api_url, skip_ws=True)` — read-only data (prices, candles, account state)
+- `Exchange(private_key, api_url, account_address)` — trading operations
 
-**Retry:** Backoff esponenziale (1s, 2s, 4s) con 3 tentativi per ogni chiamata SDK.
+**Retry:** Exponential backoff (1s, 2s, 4s) with 3 attempts per SDK call.
 
-**Metodi principali:**
+**Main methods:**
 
-| Metodo | Descrizione |
+| Method | Description |
 |---|---|
-| `connect()` | Crea `Info` + `Exchange`, carica metadata (szDecimals) |
-| `get_all_mids()` | Mid prices per tutti gli asset |
-| `get_price(coin)` | Mid price singolo |
-| `get_candles(coin, interval, start_ms, end_ms)` | Candele OHLCV |
-| `get_user_state()` | Account: margine, posizioni, balance |
+| `connect()` | Creates `Info` + `Exchange`, loads metadata (szDecimals) |
+| `get_all_mids()` | Mid prices for all assets |
+| `get_price(coin)` | Single mid price |
+| `get_candles(coin, interval, start_ms, end_ms)` | OHLCV candles |
+| `get_user_state()` | Account: margin, positions, balance |
 | `get_account_balance()` | accountValue in USDC |
-| `get_open_positions()` | Posizioni con szi (signed), entry, PnL, liquidation |
+| `get_open_positions()` | Positions with szi (signed), entry, PnL, liquidation |
 | `place_market_order(coin, is_buy, size)` | Market order via `exchange.market_open()` |
-| `close_position(coin)` | Chiusura via `exchange.market_close()` |
-| `update_leverage(coin, leverage, is_cross)` | Imposta leva per coin |
-| `round_size(coin, size)` | Arrotonda a szDecimals (truncate/floor) |
+| `close_position(coin)` | Close via `exchange.market_close()` |
+| `update_leverage(coin, leverage, is_cross)` | Set leverage per coin |
+| `round_size(coin, size)` | Round to szDecimals (truncate/floor) |
 
-**szDecimals:** Ogni coin ha una precisione di size specifica (es. BTC: 5 decimali, DOGE: 0). Il client carica questi dati da `info.meta()` all'avvio e li usa per arrotondare tutte le quantita'.
+**szDecimals:** Each coin has a specific size precision (e.g. BTC: 5 decimals, DOGE: 0). The client loads this data from `info.meta()` at startup and uses it to round all quantities.
 
 ### 2. MarketData (`core/market_data.py`)
 
-Cache in memoria dei dati di mercato con aggiornamento via WebSocket.
+In-memory cache of market data with WebSocket updates.
 
-**Thread safety:** Il WebSocket SDK gira in un thread separato. `threading.Lock` protegge `_mid_prices` e `_candles`. Contention minima: write dal WS thread, read ogni 60s dal main loop asyncio.
+**Thread safety:** The WebSocket SDK runs in a separate thread. `threading.Lock` protects `_mid_prices` and `_candles`. Minimal contention: writes from WS thread, reads every 60s from the main asyncio loop.
 
-**Flusso dati:**
-1. **Avvio:** Carica candele storiche via REST (max 10 richieste parallele)
-2. **Runtime:** Aggiorna in real-time via WebSocket
-   - `allMids` stream: tutti i mid prices in un singolo stream
-   - `candle` stream: per ogni coppia coin/interval
+**Data flow:**
+1. **Startup:** Loads historical candles via REST (max 10 parallel requests)
+2. **Runtime:** Updates in real-time via WebSocket
+   - `allMids` stream: all mid prices in a single stream
+   - `candle` stream: per coin/interval pair
 
-**Indicatori calcolati:**
+**Calculated indicators:**
 - RSI(14) via `ta.momentum.RSIIndicator`
 - Bollinger Bands(20, 2) via `ta.volatility.BollingerBands`
 - MACD(12, 26, 9) via `ta.trend.MACD`
 - EMA(9, 21, 50) via `ta.trend.EMAIndicator`
 
-**Intervalli:** `5m` (300 candele, ~25h — per RSI Divergence), `15m` (200 candele) e `1h` (300 candele per EMA200). Configurabile via `MarketConfig.intervals`.
+**Intervals:** `5m` (300 candles, ~25h — for RSI Divergence), `15m` (200 candles) and `1h` (300 candles for EMA200). Configurable via `MarketConfig.intervals`.
 
 ### 3. Bot (`main.py`)
 
-Orchestratore principale. Possiede tutti i componenti e gestisce il loop.
+Main orchestrator. Owns all components and manages the loop.
 
-**Ciclo di vita:**
-1. `start()` — Connette client, DB, scopre coin, avvia WS, strategie
-2. `run()` — Loop principale con `_tick()` ogni `decision_interval` secondi
-3. `stop()` — Shutdown graceful: salva stato, chiude connessioni
+**Lifecycle:**
+1. `start()` — Connects client, DB, discovers coins, starts WS, strategies
+2. `run()` — Main loop with `_tick()` every `decision_interval` seconds
+3. `stop()` — Graceful shutdown: saves state, closes connections
 
 **Strategy modes** (`--strategy` flag):
-- `multi` (default): `MultiStrategy` aggrega decisions da Mean Reversion (15m) + RSI Divergence (5m)
-- `mean_reversion`: Solo Mean Reversion su 15m (legacy)
-- `rsi_div`: Solo RSI Divergence su 5m
+- `multi` (default): `MultiStrategy` aggregates decisions from Mean Reversion (15m) + RSI Divergence (5m)
+- `mean_reversion`: Mean Reversion only on 15m (legacy)
+- `rsi_div`: RSI Divergence only on 5m
 
-**Flusso `_tick()`:**
-1. Risk refresh (balance, posizioni, kill switch, daily pause)
-2. Check SL/TP/trailing/time stop su posizioni aperte
-3. Refresh funding rates (ogni 5 cicli)
+**`_tick()` flow:**
+1. Risk refresh (balance, positions, kill switch, daily pause)
+2. Check SL/TP/trailing/time stop on open positions
+3. Refresh funding rates (every 5 cycles)
 4. Update trend filter + active strategy (multi/single)
 5. Generate candidate decisions (merged if multi)
-6. AI review opzionale
-7. Sort: CLOSE first, poi entries
-8. Anti-churning: non comprare cio' che stai vendendo nello stesso ciclo
-9. Validate + execute per ogni decisione
-10. Balance snapshot periodico (ogni 5 min)
+6. Optional AI review
+7. Sort: CLOSE first, then entries
+8. Anti-churning: don't buy what you're selling in the same cycle
+9. Validate + execute each decision
+10. Periodic balance snapshot (every 5 min)
 11. Check consecutive losses
 12. Write status to `data/bot_status.json` (read by Next.js dashboard)
 
-### 4. Flusso dati
+### 4. Data Flow
 
 ```
 Hyperliquid API
-    │
-    ├──REST──→ HyperliquidClient ──→ MarketData (candle loading)
-    │                                     │
-    └──WS───→ MarketData._ws_info ────────┤
-              (allMids, candles)           │
-                                          ▼
+    |
+    +--REST--> HyperliquidClient --> MarketData (candle loading)
+    |                                     |
+    +--WS---> MarketData._ws_info --------+
+              (allMids, candles)           |
+                                          v
                                     DataFrame cache
                                 (per coin/interval: 5m, 15m, 1h)
-                                          │
-                    ┌─────────────────────┼─────────────────────┐
-                    │                     │                     │
+                                          |
+                    +---------------------+---------------------+
+                    |                     |                     |
               TrendFilter          MeanReversion         RSIDivergence
               (1h EMA50/200)       (15m RSI/BB/Vol)      (5m swing/RSI)
-                    │                     │                     │
-                    └──────────┬──────────┴──────────┬──────────┘
-                               │                     │
-                         MultiStrategy ◄─────────────┘
+                    |                     |                     |
+                    +----------+----------+----------+---------+
+                               |                     |
+                         MultiStrategy <-------------+
                          (decision merger)
-                               │
+                               |
                           Decisions
                           (BUY/SHORT/CLOSE)
-                               │
-                         ┌─────┤
-                         │     │
+                               |
+                         +-----+
+                         |     |
                     AI Review  Risk Manager
                     (optional) (mandatory)
-                         │     │
-                         └──┬──┘
-                            │
+                         |     |
+                         +--+--+
+                            |
                         Execute
                    (Hyperliquid SDK)
 ```
 
-## Concorrenza
+## Concurrency
 
-- **Main loop:** Singolo thread asyncio
-- **WebSocket:** Thread separato (gestito dal SDK)
-- **Candle loading:** `asyncio.gather()` con semaphore (10 richieste parallele)
-- **SDK calls:** `asyncio.to_thread()` per wrappare le chiamate sincrone
+- **Main loop:** Single asyncio thread
+- **WebSocket:** Separate thread (managed by SDK)
+- **Candle loading:** `asyncio.gather()` with semaphore (10 parallel requests)
+- **SDK calls:** `asyncio.to_thread()` to wrap synchronous calls
 
-## Configurazione
+## Configuration
 
-Tutte le configurazioni sono dataclass frozen (`@dataclass(frozen=True)`):
+All configurations are frozen dataclasses (`@dataclass(frozen=True)`):
 - `HyperliquidConfig` — API, testnet, leverage, margin mode
-- `AIConfig` — modelli, timeout, backend, soglie
-- `RiskConfig` — limiti trading, trailing, cooldown
-- `MarketConfig` — volume minimo, max coins, intervalli candele
-- `StrategyConfig` — strategie attive, parametri RSI Div, intervalli per strategia
-- `TelegramConfig` — notifiche
+- `AIConfig` — models, timeout, backend, thresholds
+- `RiskConfig` — trading limits, trailing, cooldown
+- `MarketConfig` — minimum volume, max coins, candle intervals
+- `StrategyConfig` — active strategies, RSI Div parameters, per-strategy intervals
+- `TelegramConfig` — notifications
 
-Caricate da variabili d'ambiente in `load_settings()`.
+Loaded from environment variables in `load_settings()`.

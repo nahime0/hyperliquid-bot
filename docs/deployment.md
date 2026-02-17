@@ -1,14 +1,14 @@
 # Deployment
 
-## Requisiti
+## Requirements
 
-- **Python 3.11+** (testato con 3.14)
-- **pip** per installazione dipendenze
-- **Wallet Hyperliquid** con fondi su testnet o mainnet
-- **Node.js 18+** per la dashboard Next.js (opzionale)
-- **API Key Anthropic** per il motore AI (opzionale con `--no-ai`)
+- **Python 3.11+** (tested with 3.14)
+- **pip** for dependency installation
+- **Hyperliquid wallet** with funds on testnet or mainnet
+- **Node.js 18+** for the Next.js dashboard (optional)
+- **Anthropic API Key** for the AI engine (optional with `--no-ai`)
 
-## Installazione locale
+## Local Installation
 
 ```bash
 # Clone
@@ -19,35 +19,35 @@ cd binance
 python3 -m venv .venv
 source .venv/bin/activate
 
-# Dipendenze
+# Dependencies
 pip install -r requirements.txt
 
-# Configurazione
+# Configuration
 cp .env.example .env
-# Modifica .env con le tue credenziali
+# Edit .env with your credentials
 ```
 
-## Configurazione minima
+## Minimum Configuration
 
-Modifica `.env`:
+Edit `.env`:
 
 ```env
-# Obbligatorio per trading
+# Required for trading
 HL_PRIVATE_KEY=0x...your_private_key...
 HL_ACCOUNT_ADDRESS=0x...your_address...
 HL_TESTNET=true
 
-# AI Advisor (opzionale con --no-ai)
+# AI Advisor (optional with --no-ai)
 AI_ADVISOR=claude
 ```
 
-## Verifica connessione
+## Connection Verification
 
 ```bash
-# Test connessione testnet
+# Test testnet connection
 .venv/bin/python scripts/test_connection.py
 
-# Oppure
+# Or
 .venv/bin/python -c "
 from hyperliquid.info import Info
 info = Info('https://api.hyperliquid-testnet.xyz', skip_ws=True)
@@ -56,28 +56,28 @@ print('BTC mid:', info.all_mids().get('BTC'))
 "
 ```
 
-## Primo avvio
+## First Run
 
 ```bash
-# 1. Test veloce (paper + no AI + singolo ciclo)
+# 1. Quick test (paper + no AI + single cycle)
 .venv/bin/python main.py --paper --no-ai --once
 
-# 2. Test con AI review
+# 2. Test with AI review
 .venv/bin/python main.py --paper --once
 
-# 3. Paper trading continuo
+# 3. Continuous paper trading
 .venv/bin/python main.py --paper
 
-# 4. Testnet con ordini reali
+# 4. Testnet with real orders
 .venv/bin/python main.py
 
-# 5. MAINNET (solo dopo validazione!)
+# 5. MAINNET (only after validation!)
 .venv/bin/python main.py --live
 ```
 
-## Deployment su server (systemd)
+## Server Deployment (systemd)
 
-### Creare il file di servizio
+### Create the service file
 
 ```ini
 # /etc/systemd/system/trading-bot.service
@@ -99,24 +99,24 @@ StandardError=journal
 WantedBy=multi-user.target
 ```
 
-### Comandi
+### Commands
 
 ```bash
-# Abilitare e avviare
+# Enable and start
 sudo systemctl enable trading-bot
 sudo systemctl start trading-bot
 
-# Verificare stato
+# Check status
 sudo systemctl status trading-bot
 
 # Logs
 sudo journalctl -u trading-bot -f
 
-# Fermare
+# Stop
 sudo systemctl stop trading-bot
 ```
 
-## Deployment con supervisor
+## Deployment with supervisor
 
 ```ini
 # /etc/supervisor/conf.d/trading-bot.conf
@@ -134,7 +134,7 @@ stdout_logfile_maxbytes=10MB
 stdout_logfile_backups=5
 ```
 
-## Docker (opzionale)
+## Docker (optional)
 
 ```dockerfile
 FROM python:3.11-slim
@@ -155,40 +155,40 @@ docker run -d --name trading-bot --env-file .env trading-bot
 
 ## Monitoring
 
-### Dashboard web (Next.js)
+### Web Dashboard (Next.js)
 
-La dashboard e' un'applicazione Next.js separata nella cartella `web/`. Legge il database SQLite in read-only (WAL mode) tramite `better-sqlite3` e il file `data/bot_status.json` per lo stato live. Auto-refresh via SWR polling (nessun WebSocket necessario).
+The dashboard is a separate Next.js application in the `web/` folder. It reads the SQLite database in read-only mode (WAL mode) via `better-sqlite3` and the `data/bot_status.json` file for live state. Auto-refresh via SWR polling (no WebSocket needed).
 
 ```bash
-# Sviluppo (porta 3000)
+# Development (port 3000)
 cd web && npm install && npm run dev
 
-# Produzione
+# Production
 cd web && npm run build && npm start
 ```
 
-### Log
+### Logs
 
-I log vengono scritti in `logs/bot.log` con rotazione automatica (5MB, 5 file di backup).
+Logs are written to `logs/bot.log` with automatic rotation (5MB, 5 backup files).
 
 ```bash
-# Seguire i log in tempo reale
+# Follow logs in real-time
 tail -f logs/bot.log
 
-# Filtrare errori
+# Filter errors
 grep -i error logs/bot.log
 ```
 
 ### Telegram
 
-Configura `TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` per ricevere:
-- Alert su trade eseguiti
-- Notifiche kill switch e daily pause
-- Start/stop del bot
+Configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` to receive:
+- Alerts on executed trades
+- Kill switch and daily pause notifications
+- Bot start/stop
 
 ### Database
 
-Il database SQLite si trova in `data/trading_bot.db`. Puo' essere ispezionato con:
+The SQLite database is located at `data/trading_bot.db`. It can be inspected with:
 
 ```bash
 sqlite3 data/trading_bot.db
@@ -197,12 +197,12 @@ SELECT * FROM trades ORDER BY id DESC LIMIT 10;
 SELECT * FROM positions WHERE status='OPEN';
 ```
 
-## Sicurezza
+## Security
 
-- **Private key:** Non committare `.env` nel repository. Usa `.gitignore`.
-- **API wallet:** Su Hyperliquid, crea un API wallet dedicato con limiti di prelievo.
-- **Network:** Il bot necessita di connessione HTTPS verso `api.hyperliquid.xyz` o `api.hyperliquid-testnet.xyz`.
-- **Firewall:** Se la dashboard Next.js e' esposta, limitare l'accesso alla rete locale o usare un reverse proxy con autenticazione.
+- **Private key:** Do not commit `.env` to the repository. Use `.gitignore`.
+- **API wallet:** On Hyperliquid, create a dedicated API wallet with withdrawal limits.
+- **Network:** The bot requires HTTPS connectivity to `api.hyperliquid.xyz` or `api.hyperliquid-testnet.xyz`.
+- **Firewall:** If the Next.js dashboard is exposed, restrict access to the local network or use a reverse proxy with authentication.
 
 ## Upgrade
 
@@ -214,15 +214,15 @@ pip install -r requirements.txt
 sudo systemctl restart trading-bot
 ```
 
-Le migrazioni del database vengono applicate automaticamente all'avvio.
+Database migrations are applied automatically at startup.
 
 ## Troubleshooting
 
-| Problema | Soluzione |
+| Problem | Solution |
 |---|---|
-| `ConnectionError` su API | Verificare connessione internet e URL API |
-| `RuntimeError: Client not connected` | Assicurarsi che `connect()` venga chiamato prima di operare |
-| Kill switch attivato | Reset manuale necessario, verificare drawdown |
-| `No mid price for X` | Il coin potrebbe non essere disponibile su Hyperliquid |
-| Dashboard non si apre | Verificare che la porta 3000 non sia occupata (`lsof -i :3000`) |
-| `szDecimals not found` | Il coin non e' nella universe di Hyperliquid |
+| `ConnectionError` on API | Check internet connection and API URL |
+| `RuntimeError: Client not connected` | Ensure `connect()` is called before operating |
+| Kill switch activated | Manual reset needed, check drawdown |
+| `No mid price for X` | The coin may not be available on Hyperliquid |
+| Dashboard won't open | Check that port 3000 is not in use (`lsof -i :3000`) |
+| `szDecimals not found` | The coin is not in the Hyperliquid universe |
